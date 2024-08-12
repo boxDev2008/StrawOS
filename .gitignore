@@ -1,0 +1,5 @@
+kernel/obj/
+kernel/bin/
+iso_root/boot/kernel
+libs/obj/
+limine/
