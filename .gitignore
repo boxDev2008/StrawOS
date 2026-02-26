@@ -1,0 +1,9 @@
+*.elf
+*.o
+*.a
+*.iso
+limine
+iso_root
+kernel/bin
+kernel/obj
+libc/obj
