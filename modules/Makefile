@@ -9,7 +9,7 @@ CFLAGS  := \
     -fno-stack-protector \
     -fno-pie -fno-pic \
     -mno-red-zone \
-    -mno-sse -mno-sse2 -mno-mmx \
+    -mno-mmx \
     -O2 -Wall \
     -std=c11 \
     -I../libc/include

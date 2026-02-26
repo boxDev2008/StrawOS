@@ -73,10 +73,19 @@ static struct flanterm_context *ft_ctx;
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 static inline void sse_enable(void) {
-    uint64_t cr4;
-    __asm__ volatile ("mov %%cr4, %0" : "=r"(cr4));
-    cr4 |= (1 << 9) | (1 << 10);
-    __asm__ volatile ("mov %0, %%cr4" :: "r"(cr4));
+    uint64_t cr0, cr4;
+
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1UL << 2);   // clear EM (bit 2) — no FPU emulation
+    cr0 |=  (1UL << 1);   // set   MP (bit 1) — monitor coprocessor
+    __asm__ volatile("mov %0, %%cr0" :: "r"(cr0));
+
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1UL << 9);    // set OSFXSR     (bit 9)  — enable FXSAVE/FXRSTOR + SSE
+    cr4 |= (1UL << 10);   // set OSXMMEXCPT (bit 10) — enable SSE exception handling
+    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4));
+
+    __asm__ volatile("fninit");   // initialise FPU to clean state
 }
 
 static inline uint32_t get_rgb(uint8_t r, uint8_t g, uint8_t b) { return (r << 16) | (g << 8) | b; }

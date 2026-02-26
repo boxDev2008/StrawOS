@@ -11,7 +11,7 @@ modules:
 	make -C modules
 
 run:
-	qemu-system-x86_64 -M q35 -m 256M -cdrom strawos-x86_64.iso -netdev user,id=n0,hostfwd=tcp::8080-:80 -device rtl8139,netdev=n0
+	qemu-system-x86_64 -M q35 -m 256M -cdrom strawos-x86_64.iso
 
 iso: libc kernel modules
 	mkdir -p iso_root/boot/limine iso_root/EFI/BOOT

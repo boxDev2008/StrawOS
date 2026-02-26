@@ -133,7 +133,8 @@ Task *task_create_user(const char *name, uint64_t entry_va, void *aspace)
     t->kstack = kstack;
     t->ustack = (uint8_t *)ustack_va_base; // store base (bottom) of user stack
     task_common_init(t, name);
-    t->aspace = aspace;  // must be set AFTER task_common_init (which zeroes it)
+    t->aspace   = aspace;  // must be set AFTER task_common_init (which zeroes it)
+    t->fpu_used = 1;       // userspace tasks always use SSE; ensure clean state on first switch
 
     // The kernel stack for a new user task is set up so that task_switch_asm
     // does 'ret' into task_userspace_trampoline, which then does iretq into ring 3.
@@ -198,6 +199,10 @@ static void do_switch(Task *to)
     s_current  = to;
     to->state  = TASK_RUNNING;
 
+    // Save outgoing task's FPU/SSE state
+    if (from->fpu_used)
+        __asm__ volatile("fxsave %0" : "=m"(from->fpu_state));
+
     // Update TSS.rsp0 so ring-0 interrupts for the new task use its kernel stack.
     gdt_set_kernel_stack((uint64_t)(to->kstack + TASK_STACK_SIZE));
 
@@ -208,6 +213,12 @@ static void do_switch(Task *to)
         // Switch to kernel address space
         vmm_switch_aspace(vmm_kernel_aspace());
     }
+
+    // Restore incoming task's FPU/SSE state (or reset to clean if first use)
+    if (to->fpu_used)
+        __asm__ volatile("fxrstor %0" :: "m"(to->fpu_state));
+    else
+        __asm__ volatile("fninit");
 
     task_switch_asm(&from->ctx, &to->ctx);
     // Returns here when switched back to `from`.

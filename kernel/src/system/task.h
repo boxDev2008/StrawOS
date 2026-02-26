@@ -6,7 +6,12 @@
 // Maximum number of tasks the kernel can track simultaneously
 #define TASK_MAX         16
 #define TASK_STACK_SIZE  8192   // 8 KiB kernel stack per task
-#define TASK_USTACK_SIZE 8192   // 8 KiB user stack per task
+#define TASK_USTACK_SIZE 65536  // 64 KiB user stack per task
+
+// 512-byte, 16-byte aligned buffer for FXSAVE/FXRSTOR (saves x87 + SSE state)
+typedef struct {
+    uint8_t data[512];
+} __attribute__((aligned(16))) FxsaveBuffer;
 
 typedef enum {
     TASK_UNUSED  = 0,   // slot is free
@@ -42,6 +47,10 @@ typedef struct Task {
 
     // Address space — NULL means share kernel page tables
     void       *aspace;         // AddressSpace*, NULL = kernel
+
+    // FPU / SSE state — saved/restored on every context switch
+    FxsaveBuffer fpu_state;     // 512-byte FXSAVE buffer (16-byte aligned)
+    int          fpu_used;      // non-zero once task has touched FPU/SSE
 
     // Plan 9-style memory segment tracking
     uint64_t    brk;            // current program break (end of data segment)
