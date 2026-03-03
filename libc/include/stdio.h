@@ -43,40 +43,13 @@ typedef struct dirent
 }
 dirent_t;
 
-inline int open(const char *path, int flags)
-{
-    return (int)syscall2(SYS_OPEN, (uint64_t)path, (uint64_t)flags);
-}
-
-inline int close(int fd)
-{
-    return (int)syscall1(SYS_CLOSE, (uint64_t)fd);
-}
-
-inline int write(int fd, const void *buf, size_t count)
-{
-    return (int)syscall3(SYS_WRITE, (uint64_t)fd, (uint64_t)buf, (uint64_t)count);
-}
-
-inline int read(int fd, void *buf, size_t count)
-{
-    return (int)syscall3(SYS_READ, (uint64_t)fd, (uint64_t)buf, (uint64_t)count);
-}
-
-inline int seek(int fd, int64_t offset, int whence)
-{
-    return (int)syscall3(SYS_SEEK, (uint64_t)fd, (uint64_t)offset, (uint64_t)whence);
-}
-
-inline int stat(const char *path, stat_t *statbuf)
-{
-    return (int)syscall2(SYS_STAT, (uint64_t)path, (uint64_t)statbuf);
-}
-
-inline int fstat(int fd, stat_t *statbuf)
-{
-    return (int)syscall2(SYS_FSTAT, (uint64_t)fd, (uint64_t)statbuf);
-}
+int open(const char *path, int flags);
+int close(int fd);
+int write(int fd, const void *buf, size_t count);
+int read(int fd, void *buf, size_t count);
+int seek(int fd, int64_t offset, int whence);
+int stat(const char *path, stat_t *statbuf);
+int fstat(int fd, stat_t *statbuf);
 
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t size, const char *fmt, ...);

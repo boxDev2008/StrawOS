@@ -25,27 +25,20 @@
 
 extern uint32_t* load_bmp_from_file(const char *filename, int *out_width, int *out_height);
 
-/* ── blit ───────────────────────────────────────────────────────────── */
-/*
- * Use non-temporal (NT) stores to the WC-mapped framebuffer.
- * _mm_stream_si128 emits MOVNTDQ which:
- *   1. Bypasses the CPU L1/L2/L3 cache (no cache pollution from a write-only op)
- *   2. Works optimally with the WC write-combine buffers — the CPU accumulates
- *      writes into 64-byte cache lines and bursts them to the framebuffer.
- * The _mm_sfence() at the end ensures all NT stores are globally visible
- * (i.e., flushed from WC buffers) before we yield / the next frame starts.
- *
- * dst MUST be the WC-mapped framebuffer (fb.address).
- * src is the normal cached backbuffer — _mm_load_si128 is fine there.
- */
-static void blit(uint32_t *dst, const uint32_t *src, uint32_t total)
+static void blit(uint32_t *dst, const uint32_t *src, uint32_t w, uint32_t h, uint32_t dst_pitch_bytes)
 {
-    uint32_t i = 0;
-    for (; i + 4 <= total; i += 4)
-        _mm_stream_si128((__m128i *)(dst + i), _mm_load_si128((const __m128i *)(src + i)));
-    for (; i < total; i++)
-        dst[i] = src[i];   /* tail — rare, at most 3 pixels */
-    _mm_sfence();           /* flush WC buffers before next frame */
+    const uint32_t src_row_bytes = w * sizeof(uint32_t);
+    for (uint32_t y = 0; y < h; y++) {
+        uint8_t       *d = (uint8_t *)dst + (size_t)y * dst_pitch_bytes;
+        const uint32_t *s = src + (size_t)y * w;
+
+        uint32_t x = 0;
+        for (; x + 4 <= w; x += 4)
+            _mm_stream_si128((__m128i *)(d + x * 4), _mm_load_si128((const __m128i *)(s + x)));
+        for (; x < w; x++)
+            ((uint32_t *)d)[x] = s[x];
+    }
+    _mm_sfence();
 }
 
 /* ── main ───────────────────────────────────────────────────────────── */
@@ -173,8 +166,8 @@ int main(void)
         nk_style_pop_float(ctx);
 
         /* ── Draw wallpaper ─────────────────────────────────────────── */
-        for (uint32_t i = 0; i < w * h && i < wallpaper_w * wallpaper_h; i++)
-            backbuffer[i] = wallpaper[i];
+        for (uint32_t i = 0; i < w * h; i++)
+            backbuffer[i] = 0;
 
         /* ── Draw viking room on top of wallpaper ───────────────────── */
         pr_clear(pr, PR_DEPTH_BUFFER);   /* clear depth only — wallpaper is already in color buf */
@@ -203,7 +196,7 @@ int main(void)
         nk_rawfb_render(rawfb, (struct nk_color){0}, 0);
 
         /* Flip to framebuffer */
-        blit(fb.address, backbuffer, w * h);
+        blit(fb.address, backbuffer, w, h, fb.pitch);
         yield();
     }
 

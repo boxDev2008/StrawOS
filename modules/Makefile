@@ -7,6 +7,7 @@ LIBC := ../libc/libc.a
 CFLAGS  := \
     -w \
     -ffreestanding \
+    -fno-stack-protector \
     -O3 -Wall \
     -std=c11 \
     -I../libc/include

@@ -1,4 +1,4 @@
-.PHONY: all libc kernel modules iso clean
+.PHONY: all limine libc kernel modules iso clean
 all: iso
 
 kernel:
@@ -10,10 +10,13 @@ libc:
 modules:
 	make -C modules
 
-run:
-	qemu-system-x86_64 -M q35 -m 256M -cdrom strawos-x86_64.iso
+limine:
+	make -C limine
 
-iso: libc kernel modules
+run:
+	qemu-system-x86_64 -display sdl -m 512M -cdrom strawos-x86_64.iso
+
+iso: limine libc kernel modules
 	mkdir -p iso_root/boot/limine iso_root/EFI/BOOT
 	cp kernel/bin/kernel iso_root/boot/
 	cp -r modules/ iso_root/
@@ -28,10 +31,9 @@ iso: libc kernel modules
 	    --protective-msdos-label iso_root -o strawos-x86_64.iso
 	limine/limine bios-install strawos-x86_64.iso
 
-limine:
-	git clone https://codeberg.org/Limine/Limine.git limine --branch=v10.x-binary --depth=1
-	make -C limine
-
 .PHONY: clean
 clean:
-	rm -rf limine iso_root
+	make -C kernel clean
+	make -C libc clean
+	make -C modules clean
+	rm -rf iso_root
