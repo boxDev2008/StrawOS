@@ -6,7 +6,6 @@
 #define PROT_READ  1
 #define PROT_WRITE 2
 
-void  *segbrk(void *addr);
 void  *mmap(size_t len, int prot);
 int    munmap(void *addr, size_t len);
 
@@ -16,5 +15,6 @@ void  *calloc(size_t nmemb, size_t size);
 void  *realloc(void *ptr, size_t size);
 
 int    exit(int code);
+void   yield(void);
 
 void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));

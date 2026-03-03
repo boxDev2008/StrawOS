@@ -5,12 +5,9 @@ LD      := ld
 LIBC := ../libc/libc.a
 
 CFLAGS  := \
+    -w \
     -ffreestanding \
-    -fno-stack-protector \
-    -fno-pie -fno-pic \
-    -mno-red-zone \
-    -mno-mmx \
-    -O2 -Wall \
+    -O3 -Wall \
     -std=c11 \
     -I../libc/include
 
@@ -31,8 +28,11 @@ crt0.o: crt0.asm
 test.o: test.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-test.elf: crt0.o test.o module.ld
-	$(LD) $(LDFLAGS) crt0.o test.o $(LIBC) -o $@
+bmp.o: bmp.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+test.elf: crt0.o test.o bmp.o module.ld
+	$(LD) $(LDFLAGS) crt0.o test.o bmp.o $(LIBC) -o $@
 
 clean:
 	rm -f *.o *.elf

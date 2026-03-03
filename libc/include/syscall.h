@@ -8,16 +8,25 @@
 #define SYS_WRITE   4
 #define SYS_OPEN    5
 #define SYS_CLOSE   6
-#define SYS_LSEEK   19
+#define SYS_SEEK    7
+#define SYS_STAT    8
+#define SYS_FSTAT   9
 
 #define SYS_GETPID  20
 
 #define SYS_YIELD   30
-#define SYS_JUMP    31
 
-#define SYS_SEGBRK  40
 #define SYS_MMAP    41
 #define SYS_MUNMAP  42
+
+#define SYS_DEVICE  50
+
+inline uint64_t syscall0(uint64_t nr)
+{
+    uint64_t r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(nr) : "memory");
+    return r;
+}
 
 inline uint64_t syscall1(uint64_t nr, uint64_t a0)
 {

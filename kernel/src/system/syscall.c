@@ -1,10 +1,12 @@
 #include "syscall.h"
 #include "task.h"
-#include "arch/x86_64/idt.h"
-#include "filesystem/vfs.h"
+#include "common.h"
 #include "memory/vmm.h"
 #include "memory/pmm.h"
-#include "common.h"
+#include "libk/memory.h"
+#include "filesystem/vfs.h"
+#include "devices/ps2mouse.h"
+#include "arch/x86_64/idt.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -15,6 +17,9 @@
 #define MMAP_PROT_NONE  0
 #define MMAP_PROT_READ  1
 #define MMAP_PROT_WRITE 2
+
+#define DEVICE_FRAMEBUFFER 0
+#define DEVICE_PS2MOUSE 2
 
 #define USER_MMAP_BASE  0x0000400000000000UL
 #define USER_MMAP_MAX   0x0000700000000000UL
@@ -51,6 +56,21 @@ int64_t k_close(int fd)
     return (int64_t)vfs_close(fd);
 }
 
+int64_t k_seek(int fd, int64_t offset, int whence)
+{
+    return (int64_t)vfs_seek(fd, offset, whence);
+}
+
+int64_t k_stat(const char *path, void *statbuf)
+{
+    return (int64_t)vfs_stat(path, statbuf);
+}
+
+int64_t k_fstat(int fd, void *statbuf)
+{
+    return (int64_t)vfs_fstat(fd, statbuf);
+}
+
 int64_t k_getpid(void)
 {
     Task *t = task_current();
@@ -60,12 +80,8 @@ int64_t k_getpid(void)
 int64_t k_exit(int code)
 {
     (void)code;
-    Task *t = task_current();
-    if (t) {
-        t->state = TASK_DEAD;
-        task_yield();   // give up CPU; never returns if another task is ready
-    }
-    for (;;) __asm__ volatile("hlt");
+    task_exit();   // marks current task dead and switches away — never returns
+    __builtin_unreachable();
 }
 
 
@@ -77,39 +93,6 @@ static void task_mem_init_if_needed(Task *t)
         t->brk       = USER_BRK_BASE;
         t->mmap_next = USER_MMAP_BASE;
     }
-}
-
-int64_t k_segbrk(uint64_t addr)
-{
-    Task *t = task_current();
-    if (!t || !t->aspace) return -1;
-
-    task_mem_init_if_needed(t);
-
-    /* Query-only: return the current break. */
-    if (addr == 0)
-        return (int64_t)t->brk;
-
-    /* Refuse to move the break below the base. */
-    if (addr < t->brk_base) return -1;
-
-    AddressSpace *as = (AddressSpace *)t->aspace;
-    uint64_t old_brk = t->brk;
-    uint64_t new_brk = ALIGN_UP(addr, PAGE_SIZE);
-
-    if (new_brk > old_brk) {
-        /* Expand: allocate and map new pages. */
-        uint64_t page_count = (new_brk - old_brk) / PAGE_SIZE;
-        if (!vmm_alloc_map(as, old_brk, page_count, VMM_USER_RW))
-            return -1;
-    } else if (new_brk < old_brk) {
-        /* Shrink: unmap and free pages. */
-        uint64_t page_count = (old_brk - new_brk) / PAGE_SIZE;
-        vmm_free_unmap(as, new_brk, page_count);
-    }
-
-    t->brk = new_brk;
-    return (int64_t)new_brk;
 }
 
 int64_t k_mmap(size_t len, int prot)
@@ -164,6 +147,64 @@ int64_t k_munmap(uint64_t addr, size_t len)
     return 0;
 }
 
+int64_t k_device(int device_id, void *data)
+{
+    Task *t = task_current();
+    if (!t || !t->aspace) return -1;
+
+    switch (device_id)
+    {
+    case DEVICE_FRAMEBUFFER:
+    {
+        typedef struct FramebufferDevice
+        {
+            uint32_t *address;
+            uint32_t width, height, pitch;
+        }
+        FramebufferDevice;
+        extern volatile struct limine_framebuffer_request framebuffer_req;
+        const struct limine_framebuffer *framebuffer = framebuffer_req.response->framebuffers[0];
+
+        uint64_t fb_phys    = VIRT_TO_PHYS((uint64_t)framebuffer->address);
+        uint64_t fb_bytes   = (uint64_t)framebuffer->height * framebuffer->pitch;
+        uint64_t page_count = DIV_CEIL(fb_bytes, PAGE_SIZE);
+
+        task_mem_init_if_needed(t);
+
+        uint64_t user_va = t->mmap_next;
+        t->mmap_next     = user_va + (page_count + 1) * PAGE_SIZE; /* +1 guard page */
+
+        AddressSpace *as = (AddressSpace *)t->aspace;
+
+        /*
+         * PTE_SHARED marks these pages as borrowed (device memory).
+         * vmm_free_unmap and vmm_destroy_aspace will clear the PTEs
+         * but will NOT call pmm_free_page on them.
+         * PTE_NOCACHE ensures writes go straight to the hardware framebuffer.
+         */
+        if (!vmm_map(as, user_va, fb_phys, page_count,
+                     PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_SHARED))
+            return -1;
+
+        FramebufferDevice _data = {
+            .address = (uint32_t *)user_va,
+            .width   = framebuffer->width,
+            .height  = framebuffer->height,
+            .pitch   = framebuffer->pitch,
+        };
+        memcpy(data, &_data, sizeof(FramebufferDevice));
+        return 0;
+    }
+    case DEVICE_PS2MOUSE:
+    {
+        memcpy(data, ps2mouse_state(), sizeof(MouseState));
+        return 0;
+    }
+    default:
+        return -1;
+    }
+}
+
 void syscall_int80_handler(InterruptFrame *frame)
 {
     uint64_t nr   = frame->rax;
@@ -195,6 +236,18 @@ void syscall_int80_handler(InterruptFrame *frame)
         case SYS_CLOSE:
             ret = k_close((int)arg0);
             break;
+        
+        case SYS_SEEK:
+            ret = k_seek((int)arg0, (int64_t)arg1, (int)arg2);
+            break;
+
+        case SYS_STAT:
+            ret = k_stat((const char *)(uintptr_t)arg0, (void *)arg1);
+            break;
+
+        case SYS_FSTAT:
+            ret = k_fstat((int)arg0, (void *)arg1);
+            break;
 
         case SYS_GETPID:
             ret = k_getpid();
@@ -205,20 +258,16 @@ void syscall_int80_handler(InterruptFrame *frame)
             ret = 0;
             break;
 
-        case SYS_JUMP:
-            ret = task_jump((uint32_t)arg0);
-            break;
-
-        case SYS_SEGBRK:
-            ret = k_segbrk(arg0);
-            break;
-
         case SYS_MMAP:
             ret = k_mmap((size_t)arg0, (int)arg1);
             break;
 
         case SYS_MUNMAP:
             ret = k_munmap(arg0, (size_t)arg1);
+            break;
+        
+        case SYS_DEVICE:
+            ret = k_device((int)arg0, (void*)arg1);
             break;
         default:
             ret = -1;

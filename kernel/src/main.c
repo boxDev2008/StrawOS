@@ -17,27 +17,12 @@
 
 #include "system/syscall.h"
 #include "system/task.h"
-#include "system/elf.h"
+#include "elf.h"
 
 #include "flanterm/flanterm.h"
 #include "flanterm/flanterm_backends/fb.h"
 
-/*
- * ── QEMU network addresses ────────────────────────────────────────────────
- *
- * These match the QEMU user-mode networking defaults.  Launch QEMU with:
- *
- *   -netdev user,id=n0,hostfwd=tcp::8080-:80 -device rtl8139,netdev=n0
- *
- * Then open http://localhost:8080 in your browser.
- *
- * If you change the QEMU -netdev net= parameter, update MY_IP accordingly.
- */
-#define MY_IP      ((10<<24)|(0<<16)|(2<<8)|15)   /* 10.0.2.15  */
-#define MY_GW      ((10<<24)|(0<<16)|(2<<8)|2)    /* 10.0.2.2   */
-#define MY_MASK    ((255<<24)|(255<<16)|(255<<8)|0) /* 255.255.255.0 */
-
-// ── limine requests ───────────────────────────────────────────────────────────
+#include "devices/ps2mouse.h"
 
 __attribute__((used, section(".requests")))
 static volatile struct limine_memmap_request memmap_req = {
@@ -54,15 +39,16 @@ static volatile struct limine_executable_address_request exe_addr_req = {
     .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST_ID, .revision = 0
 };
 
-__attribute__((used, section(".requests")))
-static volatile struct limine_framebuffer_request framebuffer_req = {
-    .id = LIMINE_FRAMEBUFFER_REQUEST_ID, .revision = 0
-};
 
 __attribute__((used, section(".requests")))
 static volatile struct limine_module_request module_request = {
     .id = LIMINE_MODULE_REQUEST_ID,
     .revision = 0
+};
+
+__attribute__((used, section(".requests")))
+volatile struct limine_framebuffer_request framebuffer_req = {
+    .id = LIMINE_FRAMEBUFFER_REQUEST_ID, .revision = 0
 };
 
 // ── globals ───────────────────────────────────────────────────────────────────
@@ -85,22 +71,60 @@ static inline void sse_enable(void) {
     cr4 |= (1UL << 10);   // set OSXMMEXCPT (bit 10) — enable SSE exception handling
     __asm__ volatile("mov %0, %%cr4" :: "r"(cr4));
 
-    __asm__ volatile("fninit");   // initialise FPU to clean state
-}
+    __asm__ volatile("fninit");   // initialise x87 FPU to clean state
 
-static inline uint32_t get_rgb(uint8_t r, uint8_t g, uint8_t b) { return (r << 16) | (g << 8) | b; }
+    // Initialise MXCSR to a known-good state: all SSE exceptions masked,
+    // round-to-nearest, no pending flags.  fninit does NOT touch MXCSR,
+    // so on real hardware it may contain whatever the firmware left behind,
+    // causing spurious #XF (#19) exceptions when userspace code (e.g.
+    // Nuklear's font baking) produces denormals or other FP edge cases.
+    uint32_t mxcsr = 0x1F80;  // IM|DM|ZM|OM|UM|PM all set, rounding = nearest
+    __asm__ volatile("ldmxcsr %0" :: "m"(mxcsr));
+}
 
 // ── ELF64 userspace loader ────────────────────────────────────────────────────
 
 static void keyboard_handler(InterruptFrame *frame)
 {
     uint8_t scancode = inb(0x60);
-    kprintf("%c", scancode);
+    //kprintf("%c", scancode);
 }
 
 void kputs(const char *str, size_t count)
 {
     flanterm_write(ft_ctx, str, count);
+}
+
+static inline uint32_t rgb(uint8_t r, uint8_t g, uint8_t b)
+{
+    return (r << 16) | (g << 8) | b;
+}
+
+static void fill_rect(uint32_t *buffer, uint32_t buffer_width, int x, int y, int w, int h, uint32_t color)
+{
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++)
+            buffer[(y + j) * buffer_width + (x + i)] = color;
+}
+
+// this runs WAY FASTER than in userspace
+int main(struct limine_framebuffer *fb)
+{
+    uint32_t *backbuffer = kmalloc(fb->width * fb->height * sizeof(uint32_t));
+    if (!backbuffer) return 1;
+    
+    int i = 0;
+    while (1)
+    {
+        uint32_t color = rgb(i, i, i);
+        for (uint32_t j = 0; j < fb->width * fb->height; j++)
+            ((uint32_t *)backbuffer)[j] = color;
+        fill_rect(backbuffer, fb->width, 0, 0, 32, 32, rgb(255, 0, 0));
+        i++;
+        for (uint32_t j = 0; j < fb->width * fb->height; j++)
+            ((uint32_t *)fb->address)[j] = ((uint32_t *)backbuffer)[j];
+    }
+    return 0;
 }
 
 void kernel_main(void)
@@ -151,6 +175,8 @@ void kernel_main(void)
     task_init();
 
     irq_register(1, keyboard_handler);
+    ps2mouse_init(framebuffer->width, framebuffer->height);
+
     __asm__ volatile("sti");
 
     const char *gaewrfg = "Hello World\r\n";
@@ -169,30 +195,12 @@ void kernel_main(void)
         kprintf("[kernel] Failed to load /modules/test.elf\r\n");
     }
 
-    kprintf("\r\n=== Task list before jump ===\r\n");
+    kprintf("\r\n=== Task list before scheduling ===\r\n");
     task_list();
-
-    if (test_task) {
-        kprintf("\r\n=== Jumping to test.elf (pid %u) ===\r\n", test_task->pid);
+    //main(framebuffer); // remove this to run it in userspace instead of kernelspace
+    while (1)
+    {
+        task_reap_dead();
         task_yield();
-        kprintf("\r\n=== Returned to kernel task ===\r\n");
     }
-
-    kprintf("\r\n=== Final task list ===\r\n");
-    task_list();
-
-    int fd = vfs_open("/modules/hello_world.txt", O_RDONLY);
-    VStat stat;
-    if (vfs_fstat(fd, &stat) < 0) {
-        kprintf("File not found\r\n");
-        for (;;) __asm__ volatile("hlt");
-    }
-    uint64_t size = stat.st_size;
-    kprintf("Size: %u\r\n", (uint32_t)size);
-    uint8_t *buf = (uint8_t*)kmalloc(size);
-    vfs_read(fd, buf, size);
-    vfs_close(fd);
-    kprintf("\r\nKernel halting.\r\n");
-
-    for (;;) __asm__ volatile("hlt");
 }

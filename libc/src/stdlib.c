@@ -1,12 +1,6 @@
 #include <stdlib.h>
 #include <syscall.h>
 
-void *segbrk(void *addr)
-{
-    long r = syscall1(SYS_SEGBRK, (long)addr);
-    return (r == -1) ? (void *)-1 : (void *)(uintptr_t)r;
-}
-
 void *mmap(size_t len, int prot)
 {
     long r = syscall2(SYS_MMAP, (long)len, (long)prot);
@@ -21,6 +15,11 @@ int munmap(void *addr, size_t len)
 int exit(int code)
 {
     return (int)syscall1(SYS_EXIT, (long)code);
+}
+
+void yield(void)
+{
+    syscall0(SYS_YIELD);
 }
 
 static void swap_bytes(char *a, char *b, size_t size)

@@ -6,11 +6,13 @@
 #define PTE_WRITABLE   (1UL << 1)
 #define PTE_USER       (1UL << 2)
 #define PTE_WRITETHROUGH (1UL << 3)
+#define PTE_WRITECOMBINE PTE_WRITETHROUGH
 #define PTE_NOCACHE    (1UL << 4)
 #define PTE_ACCESSED   (1UL << 5)
 #define PTE_DIRTY      (1UL << 6)
 #define PTE_HUGEPAGE   (1UL << 7)   /* PS bit – 2 MiB or 1 GiB page */
 #define PTE_GLOBAL     (1UL << 8)
+#define PTE_SHARED     (1UL << 9)   /* SW bit: page is borrowed (device/shared), do NOT free physical page on unmap */
 #define PTE_NX         (1UL << 63)  /* No-Execute (requires EFER.NXE)  */
 
 #define VMM_KERNEL_RW  (PTE_PRESENT | PTE_WRITABLE | PTE_GLOBAL | PTE_NX)
@@ -48,6 +50,9 @@ uint64_t vmm_virt_to_phys(AddressSpace *as, uint64_t virt);
 uint64_t vmm_alloc_map(AddressSpace *as, uint64_t virt, uint64_t page_count, uint64_t flags);
 
 void vmm_free_unmap(AddressSpace *as, uint64_t virt, uint64_t page_count);
+
+/* Like vmm_free_unmap but never calls pmm_free_page — for device/shared mappings. */
+void vmm_unmap_shared(AddressSpace *as, uint64_t virt, uint64_t page_count);
 
 static inline void vmm_invlpg(uint64_t virt)
 {

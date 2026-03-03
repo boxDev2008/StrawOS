@@ -9,8 +9,8 @@
 #define MAX_SMALL    512u
 #define NUM_CLASSES  (MAX_SMALL / SMALL_GRAN)  /* 32 */
 
-/* Minimum heap growth. */
-#define GROW_MIN     (4096u * 4u)   /* 16 KiB */
+/* Minimum arena size when mmap'ing a new slab. */
+#define ARENA_MIN    (4096u * 4u)   /* 16 KiB */
 
 #define BLOCK_FREE      1u
 #define BLOCK_SENTINEL  2u
@@ -30,9 +30,23 @@ typedef struct BlockHdr {
  */
 #define LARGE_PREV(h) (*(BlockHdr **)((char *)(h) + HDR_SIZE))
 
+/*
+ * Arena header — stored at the very start of every mmap'd slab.
+ * Each mmap call creates one independent arena; arenas are never merged.
+ *
+ * Slab layout:
+ *   [ Arena (padded to ALIGN) | BlockHdr ... user data ... | sentinel BlockHdr ]
+ */
+typedef struct Arena {
+    struct Arena *next;   /* intrusive linked list of all arenas */
+    size_t        size;   /* total bytes including this header   */
+} Arena;
+
+/* Offset from the Arena base to the first BlockHdr, keeping ALIGN alignment. */
+#define ARENA_HDR_SIZE  ((sizeof(Arena) + ALIGN - 1) & ~(ALIGN - 1))
+
 static int       g_ready;
-static char     *g_heap_start;
-static char     *g_heap_end;         /* points at the sentinel BlockHdr */
+static Arena    *g_arenas;                /* list of all live slabs          */
 static BlockHdr *g_small[NUM_CLASSES];
 static BlockHdr *g_large;
 
@@ -110,62 +124,53 @@ static void fl_remove(BlockHdr *h)
     }
 }
 
+/* ── arena allocation ──────────────────────────────────────────────────── */
+
+/*
+ * mmap a new slab large enough to hold at least `min_payload` bytes,
+ * register it in g_arenas, and return the initial free BlockHdr inside it.
+ * Returns NULL on failure.
+ */
+static BlockHdr *arena_new(size_t min_payload)
+{
+    /* Total bytes we need: arena header + one block + sentinel */
+    size_t need = ARENA_HDR_SIZE + total_for(min_payload) + HDR_SIZE;
+
+    /* Round up to a multiple of 4 KiB; always at least ARENA_MIN. */
+    size_t min_slab = ARENA_HDR_SIZE + ARENA_MIN + HDR_SIZE;
+    size_t slab_size = au(need < min_slab ? min_slab : need, 4096u);
+
+    void *mem = mmap(slab_size, PROT_READ | PROT_WRITE);
+    if (!mem || mem == (void *)(size_t)-1) return 0;
+
+    /* Initialise the arena header at the base of the slab. */
+    Arena *a = (Arena *)mem;
+    a->next  = g_arenas;
+    a->size  = slab_size;
+    g_arenas = a;
+
+    /* The single free block starts right after the arena header. */
+    char     *blk_start = (char *)mem + ARENA_HDR_SIZE;
+    char     *blk_end   = (char *)mem + slab_size - HDR_SIZE;
+
+    BlockHdr *blk = (BlockHdr *)blk_start;
+    blk->size     = (size_t)(blk_end - blk_start);
+    blk->flags    = 0; blk->next_free = 0; blk->_pad = 0;
+
+    sentinel_write(blk_end);
+
+    return blk;
+}
+
 /* ── heap init ─────────────────────────────────────────────────────────── */
 
 static int heap_init(void)
 {
-    void *brk = segbrk(0);
-    if (brk == (void *)-1) return -1;
-
-    void *new_brk = (char *)brk + GROW_MIN + HDR_SIZE;
-    if (segbrk(new_brk) == (void *)-1) return -1;
-
-    g_heap_start = (char *)brk;
-    g_heap_end   = (char *)new_brk - HDR_SIZE;
-
-    BlockHdr *blk = (BlockHdr *)g_heap_start;
-    blk->size = (size_t)(g_heap_end - g_heap_start);
-    blk->flags = 0; blk->next_free = 0; blk->_pad = 0;
+    BlockHdr *blk = arena_new(ARENA_MIN);
+    if (!blk) return -1;
     fl_push_large(blk);
-    sentinel_write(g_heap_end);
-
     g_ready = 1;
     return 0;
-}
-
-/* ── grow the heap, returning a new free block ─────────────────────────── */
-
-static BlockHdr *heap_grow(size_t need)
-{
-    size_t grow = au(need < GROW_MIN ? GROW_MIN : need, ALIGN);
-    char  *old_end = g_heap_end;
-    char  *new_end = old_end + grow + HDR_SIZE;
-
-    if (segbrk(new_end) == (void *)-1) return 0;
-
-    BlockHdr *blk = (BlockHdr *)old_end;
-    blk->size = (size_t)(new_end - HDR_SIZE - old_end);
-    blk->flags = 0; blk->next_free = 0; blk->_pad = 0;
-
-    g_heap_end = new_end - HDR_SIZE;
-    sentinel_write(g_heap_end);
-
-    /* Forward-coalesce with the last block in the heap if it's free. */
-    BlockHdr *prev = 0;
-    for (BlockHdr *b = (BlockHdr *)g_heap_start;
-         b != (BlockHdr *)old_end; b = block_next(b))
-        prev = b;
-
-    if (prev && (prev->flags & BLOCK_FREE)) {
-        fl_remove(prev);
-        prev->size += blk->size;
-        prev->flags = 0;
-        fl_push_large(prev);
-        return prev;
-    }
-
-    fl_push_large(blk);
-    return blk;
 }
 
 /* ── split a block if the surplus is usable ────────────────────────────── */
@@ -207,11 +212,17 @@ void *malloc(size_t sz)
     }
 
     if (!h) {
-        /* Grow the heap and use the new block. */
-        h = heap_grow(total);
-        if (!h) return 0;
-        /* heap_grow puts it on the large list; take it off. */
-        fl_remove_large(h);
+        /*
+         * No suitable free block anywhere — mmap a new arena.
+         * Push the new block onto the large list and then pull it back off
+         * so maybe_split can carve off the remainder normally.
+         */
+        BlockHdr *blk = arena_new(sz);
+        if (!blk) return 0;
+        fl_push_large(blk);
+        h = fl_find_large(total);
+        if (h) fl_remove_large(h);
+        if (!h) return 0;   /* should not happen */
     }
 
     maybe_split(h, total);
@@ -228,7 +239,12 @@ void free(void *ptr)
     BlockHdr *h = (BlockHdr *)((char *)ptr - HDR_SIZE);
     if (h->flags & BLOCK_FREE) return;   /* double-free guard */
 
-    /* Forward coalesce with next physical block if it's free. */
+    /*
+     * Forward-coalesce with the next physical block if it is free.
+     * Safe because both blocks are in the same arena slab — we never
+     * coalesce across arenas because each arena ends in a sentinel
+     * (size == 0, BLOCK_SENTINEL set).
+     */
     BlockHdr *nxt = block_next(h);
     if (!(nxt->flags & BLOCK_SENTINEL) && (nxt->flags & BLOCK_FREE)) {
         fl_remove(nxt);
@@ -246,6 +262,11 @@ void *calloc(size_t nmemb, size_t sz)
     if (nmemb && sz > (size_t)-1 / nmemb) return 0;
     size_t total = nmemb * sz;
     void *p = malloc(total);
+    /*
+     * mmap'd pages are zero-initialised by the kernel, so freshly-carved
+     * blocks from a brand-new arena are already zeroed.  Blocks recycled
+     * from the free list are not, so we always memset to be safe.
+     */
     if (p) memset(p, 0, total);
     return p;
 }
@@ -261,7 +282,7 @@ void *realloc(void *ptr, size_t sz)
     size_t cur_py = h->size - HDR_SIZE;
     if (sz <= cur_py) return ptr;
 
-    /* Try in-place expansion: absorb the free next block. */
+    /* Try in-place expansion: absorb the free next block (same arena). */
     BlockHdr *nxt = block_next(h);
     if (!(nxt->flags & BLOCK_SENTINEL) && (nxt->flags & BLOCK_FREE)) {
         size_t combined = h->size + nxt->size;
@@ -273,7 +294,7 @@ void *realloc(void *ptr, size_t sz)
         }
     }
 
-    /* Fall back: allocate, copy, free. */
+    /* Fall back: allocate new, copy, free old. */
     void *np = malloc(sz);
     if (!np) return 0;
     memcpy(np, ptr, cur_py);

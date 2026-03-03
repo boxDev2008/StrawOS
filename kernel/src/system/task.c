@@ -14,7 +14,6 @@
 
 static Task      s_tasks[TASK_MAX];
 static Task     *s_current = NULL;
-static uint32_t  s_next_pid = 0;
 
 extern void task_switch_asm(TaskContext *from, TaskContext *to);
 extern void kprintf(const char *fmt, ...);
@@ -30,12 +29,29 @@ static Task *slot_alloc(void)
     return NULL;
 }
 
+// Return the lowest PID not currently assigned to any live task.
+static uint32_t alloc_pid(void)
+{
+    for (uint32_t candidate = 0; ; candidate++) {
+        int taken = 0;
+        for (int i = 0; i < TASK_MAX; i++) {
+            if (s_tasks[i].state != TASK_UNUSED && s_tasks[i].pid == candidate) {
+                taken = 1;
+                break;
+            }
+        }
+        if (!taken) return candidate;
+    }
+}
+
 static void task_common_init(Task *t, const char *name)
 {
-    t->pid   = s_next_pid++;
+    t->pid   = alloc_pid();
     t->state = TASK_READY;
     t->aspace = NULL;
     t->ustack = NULL;
+    t->fpu_used = 0;
+    t->brk = 0; t->brk_base = 0; t->mmap_next = 0;
     strncpy(t->name, name ? name : "task", sizeof(t->name) - 1);
     t->name[sizeof(t->name) - 1] = '\0';
 
@@ -45,12 +61,15 @@ static void task_common_init(Task *t, const char *name)
     t->ctx.r13 = 0;
     t->ctx.r14 = 0;
     t->ctx.r15 = 0;
-    t->ctx.rip = 0;
-    t->ctx.rflags = 0x202; // IF=1 (interrupts enabled) + reserved bit 1
+    t->ctx.rflags = 0x202; // IF=1
 
-    // Insert into circular list after s_current
-    t->next         = s_current->next;
-    s_current->next = t;
+    // Append to the end of the circular list (just before s_current)
+    // so that scheduling order matches creation order.
+    Task *prev = s_current;
+    while (prev->next != s_current)
+        prev = prev->next;
+    prev->next = t;
+    t->next    = s_current;
 }
 
 // ── public API ────────────────────────────────────────────────────────────────
@@ -61,18 +80,19 @@ void task_init(void)
         s_tasks[i].state = TASK_UNUSED;
 
     Task *kernel_task  = &s_tasks[0];
-    kernel_task->pid   = s_next_pid++;
-    kernel_task->state = TASK_RUNNING;
+    kernel_task->pid   = alloc_pid();
+    kernel_task->state = TASK_READY;
     kernel_task->kstack = NULL;
     kernel_task->ustack = NULL;
     kernel_task->aspace = NULL;
-    kernel_task->next  = kernel_task;
+    kernel_task->fpu_used = 0;
+    kernel_task->next  = kernel_task; // circular, points to itself
     strncpy(kernel_task->name, "kernel", sizeof(kernel_task->name) - 1);
 
     s_current = kernel_task;
 }
 
-// Create a kernel-mode (ring 0) task.
+// Create a ring-0 kernel task.
 Task *task_create(const char *name, void (*entry)(void))
 {
     Task *t = slot_alloc();
@@ -84,14 +104,8 @@ Task *task_create(const char *name, void (*entry)(void))
     t->kstack = kstack;
     task_common_init(t, name);
 
-    // Build initial kernel stack:
-    //   task_switch_asm's final 'ret' pops entry → jumps there.
-    //   No exit handler needed: use crt0 / SYS_EXIT from userspace.
-    //   For kernel tasks, the entry function should loop forever or call
-    //   task_yield() and eventually mark itself dead.
     uint64_t *sp = (uint64_t *)(kstack + TASK_STACK_SIZE);
     *--sp = (uint64_t)entry;
-
     t->ctx.rsp = (uint64_t)sp;
 
     kprintf("[task] created kernel task '%s' (pid %u)\r\n", t->name, t->pid);
@@ -99,62 +113,49 @@ Task *task_create(const char *name, void (*entry)(void))
 }
 
 // Declared in task_switch.asm
-extern void task_enter_userspace(uint64_t entry, uint64_t ustack_top,
-                                  uint64_t cs, uint64_t ss);
+extern void task_userspace_trampoline(void);
 
 // User-stack virtual address base (grows down from here)
 #define USER_STACK_VA_TOP   0x0000700000000000UL
 #define USER_STACK_VA_PAGES (TASK_USTACK_SIZE / PAGE_SIZE)
 
-// Create a userspace (ring 3) task.
+// Create a ring-3 userspace task.
 Task *task_create_user(const char *name, uint64_t entry_va, void *aspace)
 {
     Task *t = slot_alloc();
     if (!t) return NULL;
 
-    // Kernel stack for handling interrupts/syscalls from this task
     uint8_t *kstack = (uint8_t *)kmalloc(TASK_STACK_SIZE);
     if (!kstack) return NULL;
 
-    // Allocate physical pages for the user stack and map them
     AddressSpace *as = (AddressSpace *)aspace;
     uint64_t ustack_va_base = USER_STACK_VA_TOP - USER_STACK_VA_PAGES * PAGE_SIZE;
 
     for (uint64_t i = 0; i < USER_STACK_VA_PAGES; i++) {
         uint64_t phys = pmm_alloc_page();
-        if (!phys) {
-            kfree(kstack);
-            return NULL;
-        }
+        if (!phys) { kfree(kstack); return NULL; }
         uint64_t va = ustack_va_base + i * PAGE_SIZE;
         vmm_map(as, va, phys, 1, VMM_USER_RW);
     }
 
     t->kstack = kstack;
-    t->ustack = (uint8_t *)ustack_va_base; // store base (bottom) of user stack
+    t->ustack = (uint8_t *)ustack_va_base;
     task_common_init(t, name);
-    t->aspace   = aspace;  // must be set AFTER task_common_init (which zeroes it)
-    t->fpu_used = 1;       // userspace tasks always use SSE; ensure clean state on first switch
+    t->aspace   = aspace;
+    t->fpu_used = 1; // userspace always uses SSE
 
-    // The kernel stack for a new user task is set up so that task_switch_asm
-    // does 'ret' into task_userspace_trampoline, which then does iretq into ring 3.
-    // We push the arguments (entry_va, user_stack_top) onto the kernel stack.
+    // The fpu_state buffer is zeroed (task slot is in BSS / zeroed heap),
+    // but MXCSR lives at byte offset 24 of the FXSAVE area and a value of
+    // 0x0000 means ALL SSE exceptions are UNMASKED — the opposite of safe.
+    // Write 0x1F80 (all exceptions masked, round-to-nearest) so the first
+    // fxrstor into this task doesn't immediately fire a #XF.
+    *((uint32_t *)(t->fpu_state.data + 24)) = 0x1F80;
+
+    // Build kernel stack so task_switch_asm's 'ret' lands in the trampoline.
+    // The trampoline pops entry_va and ustack_top off the stack, then iretq.
     uint64_t *sp = (uint64_t *)(kstack + TASK_STACK_SIZE);
-
-    // Arguments for task_userspace_trampoline (we call it like a normal C function
-    // by pushing them in reverse; but we call via 'ret', so we use a small stub).
-    // Simpler: push entry and ustack_top as "parameters" then push the trampoline addr.
-    // The trampoline reads them from the stack directly.
-    uint64_t ustack_top = USER_STACK_VA_TOP;
-
-    // Stack layout when trampoline is entered via 'ret':
-    //   [rsp+0]  = entry_va    (first thing trampoline pops)
-    //   [rsp+8]  = ustack_top
-    *--sp = ustack_top;
-    *--sp = entry_va;
-
-    // The address task_switch_asm's 'ret' jumps to
-    extern void task_userspace_trampoline(void);
+    *--sp = USER_STACK_VA_TOP;          // arg2: ustack_top
+    *--sp = entry_va;                    // arg1: entry_va
     *--sp = (uint64_t)task_userspace_trampoline;
 
     t->ctx.rsp = (uint64_t)sp;
@@ -168,6 +169,7 @@ void task_destroy(Task *t)
 {
     if (!t || t == s_current) return;
 
+    // Unlink from circular list
     Task *prev = s_current;
     int limit = TASK_MAX;
     while (prev->next != t && prev->next != s_current && limit-- > 0)
@@ -176,8 +178,6 @@ void task_destroy(Task *t)
         prev->next = t->next;
 
     if (t->kstack) { kfree(t->kstack); t->kstack = NULL; }
-    // Note: ustack is mapped in the task's address space; freeing it properly
-    // requires walking the page tables (left as future work).
     t->state = TASK_UNUSED;
     kprintf("[task] destroyed '%s' (pid %u)\r\n", t->name, t->pid);
 }
@@ -193,28 +193,21 @@ Task *task_find(uint32_t pid)
     return NULL;
 }
 
-static void do_switch(Task *to)
+// Low-level switch: save from, restore to, update global state.
+static void do_switch(Task *from, Task *to)
 {
-    Task *from = s_current;
-    s_current  = to;
-    to->state  = TASK_RUNNING;
+    s_current = to;
 
-    // Save outgoing task's FPU/SSE state
     if (from->fpu_used)
         __asm__ volatile("fxsave %0" : "=m"(from->fpu_state));
 
-    // Update TSS.rsp0 so ring-0 interrupts for the new task use its kernel stack.
     gdt_set_kernel_stack((uint64_t)(to->kstack + TASK_STACK_SIZE));
 
-    // Switch address space if needed
-    if (to->aspace && to->aspace != from->aspace) {
+    if (to->aspace && to->aspace != from->aspace)
         vmm_switch_aspace((AddressSpace *)to->aspace);
-    } else if (!to->aspace) {
-        // Switch to kernel address space
+    else if (!to->aspace)
         vmm_switch_aspace(vmm_kernel_aspace());
-    }
 
-    // Restore incoming task's FPU/SSE state (or reset to clean if first use)
     if (to->fpu_used)
         __asm__ volatile("fxrstor %0" :: "m"(to->fpu_state));
     else
@@ -224,51 +217,105 @@ static void do_switch(Task *to)
     // Returns here when switched back to `from`.
 }
 
-void task_yield(void)
+// Find the next READY task after `start` in the ring (skipping `start` itself).
+// Returns NULL if no other READY task exists.
+static Task *find_next_ready(Task *start)
 {
-    Task *next = s_current->next;
-    int   laps = 0;
-    while (next->state != TASK_READY && laps < TASK_MAX) {
-        next = next->next;
+    Task *t = start->next;
+    int laps = 0;
+    while (laps < TASK_MAX) {
+        if (t == start) return NULL; // wrapped all the way around
+        if (t->state == TASK_READY)  return t;
+        t = t->next;
         laps++;
     }
-    if (next == s_current) return;
-
-    s_current->state = TASK_READY;
-    do_switch(next);
+    return NULL;
 }
 
-int task_jump(uint32_t pid)
+
+// Free a task that has already been switched away from.
+// Safe to call because we are no longer running on its stack.
+void task_yield(void)
 {
-    Task *target = task_find(pid);
-    if (!target) {
-        kprintf("[task] jump: pid %u not found\r\n", pid);
-        return -1;
-    }
-    if (target == s_current) return 0;
-    if (target->state != TASK_READY) {
-        kprintf("[task] jump: pid %u not ready (state=%d)\r\n",
-                pid, (int)target->state);
-        return -1;
+    Task *next = find_next_ready(s_current);
+    if (!next) return; // nobody else to run
+
+    Task *from = s_current;
+    do_switch(from, next);
+    // When we're rescheduled, execution resumes here.
+}
+
+// Called by SYS_EXIT. Marks current task DEAD and switches away. Never returns.
+// The kstack cannot be freed here (we're still on it), so it is left for
+// task_reap_dead() which the kernel task calls after returning from task_yield().
+void task_exit(void)
+{
+    Task *dying = s_current;
+    dying->state = TASK_DEAD;
+
+    Task *next = find_next_ready(dying);
+    if (!next) {
+        // No other task to run — just halt.
+        for (;;) __asm__ volatile("hlt");
     }
 
-    s_current->state = TASK_READY;
-    do_switch(target);
-    return 0;
+    s_current = next;
+
+    // Don't save dying's FPU — it will never run again.
+    gdt_set_kernel_stack((uint64_t)(next->kstack + TASK_STACK_SIZE));
+
+    if (next->aspace && next->aspace != dying->aspace)
+        vmm_switch_aspace((AddressSpace *)next->aspace);
+    else if (!next->aspace)
+        vmm_switch_aspace(vmm_kernel_aspace());
+
+    if (next->fpu_used)
+        __asm__ volatile("fxrstor %0" :: "m"(next->fpu_state));
+    else
+        __asm__ volatile("fninit");
+
+    task_switch_asm(&dying->ctx, &next->ctx);
+
+    for (;;) __asm__ volatile("hlt"); // never reached
+}
+
+// Free all DEAD tasks. Must only be called from the kernel task (never from
+// a task that might itself be dead). Unlinks each dead task from the ring,
+// frees its kernel stack, destroys its address space, and marks the slot UNUSED.
+void task_reap_dead(void)
+{
+    for (int i = 0; i < TASK_MAX; i++) {
+        Task *t = &s_tasks[i];
+        if (t->state != TASK_DEAD) continue;
+        if (t == s_current)        continue; // safety — should never happen
+
+        // Unlink from circular list
+        Task *prev = s_current;
+        int limit = TASK_MAX;
+        while (prev->next != t && prev->next != s_current && limit-- > 0)
+            prev = prev->next;
+        if (prev->next == t)
+            prev->next = t->next;
+
+        // Free kernel stack
+        if (t->kstack) { kfree(t->kstack); t->kstack = NULL; }
+
+        // Destroy address space (also frees all user pages including ustack)
+        if (t->aspace) { vmm_destroy_aspace((AddressSpace *)t->aspace); t->aspace = NULL; }
+
+        t->state = TASK_UNUSED;
+        kprintf("[task] reaped '%s' (pid %u)\r\n", t->name, t->pid);
+    }
 }
 
 void task_list(void)
 {
-    static const char *state_names[] = {
-        "unused", "ready", "running", "blocked", "dead"
-    };
-    kprintf("PID  STATE    NAME\r\n");
-    kprintf("---- -------- ----------------\r\n");
+    kprintf("PID  STATE  NAME\r\n");
+    kprintf("---- ------ ----------------\r\n");
     for (int i = 0; i < TASK_MAX; i++) {
         Task *t = &s_tasks[i];
         if (t->state == TASK_UNUSED) continue;
-        const char *sn = (t->state <= TASK_DEAD) ? state_names[t->state] : "?";
-        kprintf("%u %s %s\r\n", t->pid, sn, t->name);
+        kprintf("%u ready %s\r\n", t->pid, t->name);
     }
 }
 
@@ -326,7 +373,7 @@ Task *task_exec(const char *path, const char *name)
     kprintf("[loader] ELF entry = 0x%p, %u phdrs\r\n",
             (void *)entry_va, (uint32_t)ehdr->e_phnum);
 
-    /* ── 4. Create a fresh address space for this task ──────────────────── */
+    /* ── 4. Create a fresh address space ────────────────────────────────── */
     AddressSpace *as = vmm_create_aspace();
     if (!as) {
         kprintf("[loader] vmm_create_aspace failed\r\n");
@@ -348,12 +395,10 @@ Task *task_exec(const char *path, const char *name)
                 (void *)seg_va, (uint32_t)seg_filesz, (uint32_t)seg_memsz,
                 (uint32_t)ph->p_flags);
 
-        // Determine VMM flags from ELF segment flags
         uint64_t vmm_flags = PTE_PRESENT | PTE_USER;
         if (ph->p_flags & PF_W) vmm_flags |= PTE_WRITABLE;
         if (!(ph->p_flags & PF_X)) vmm_flags |= PTE_NX;
 
-        // Align to page boundaries
         uint64_t va_start  = seg_va & ~(PAGE_SIZE - 1);
         uint64_t va_end    = DIV_CEIL(seg_va + seg_memsz, PAGE_SIZE) * PAGE_SIZE;
         uint64_t page_cnt  = (va_end - va_start) / PAGE_SIZE;
@@ -361,17 +406,15 @@ Task *task_exec(const char *path, const char *name)
         for (uint64_t p = 0; p < page_cnt; p++) {
             uint64_t phys = pmm_alloc_page();
             if (!phys) {
-                kprintf("[loader] pmm_alloc_page failed for segment %u\r\n", i);
+                kprintf("[loader] pmm_alloc_page failed\r\n");
                 kfree(buf);
                 return NULL;
             }
             uint8_t *hhdm = (uint8_t *)PHYS_TO_VIRT(phys);
             memset(hhdm, 0, PAGE_SIZE);
 
-            // Copy file data for this page
             uint64_t page_va = va_start + p * PAGE_SIZE;
             if (page_va < seg_va + seg_filesz) {
-                // This page overlaps with file data
                 int64_t copy_start = (int64_t)page_va - (int64_t)seg_va;
                 uint64_t src_off, dst_off, copy_len;
                 if (copy_start < 0) {
@@ -390,8 +433,7 @@ Task *task_exec(const char *path, const char *name)
             }
 
             if (!vmm_map(as, page_va, phys, 1, vmm_flags)) {
-                kprintf("[loader] vmm_map failed for segment %u page %u\r\n",
-                        i, (uint32_t)p);
+                kprintf("[loader] vmm_map failed\r\n");
                 kfree(buf);
                 return NULL;
             }

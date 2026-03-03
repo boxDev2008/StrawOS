@@ -148,6 +148,12 @@ AddressSpace *vmm_create_aspace(void)
 
 static void free_pt(uint64_t *pt)
 {
+    /* Free only pages the OS owns. PTE_SHARED marks device/borrowed pages. */
+    for (int i = 0; i < ENTRIES_PER_TABLE; i++) {
+        if (!(pt[i] & PTE_PRESENT)) continue;
+        if (  pt[i] & PTE_SHARED)   continue;  /* not ours — don't free */
+        pmm_free_page(pt[i] & PTE_ADDR_MASK);
+    }
     pmm_free_page(VIRT_TO_PHYS(pt));
 }
 
@@ -272,8 +278,23 @@ void vmm_free_unmap(AddressSpace *as, uint64_t virt, uint64_t page_count)
         uint64_t v = virt + i * PAGE_SIZE;
         uint64_t *pte = walk_to_pte(pml4, v, false);
         if (!pte || !(*pte & PTE_PRESENT)) continue;
-        pmm_free_page(*pte & PTE_ADDR_MASK);
+        if (!(*pte & PTE_SHARED))           /* only free pages we own */
+            pmm_free_page(*pte & PTE_ADDR_MASK);
         *pte = 0;
         vmm_invlpg(v);
+    }
+}
+
+void vmm_unmap_shared(AddressSpace *as, uint64_t virt, uint64_t page_count)
+{
+    /* Clears PTEs without freeing the underlying physical pages. */
+    uint64_t *pml4 = (uint64_t *)PHYS_TO_VIRT(as->pml4_phys);
+    for (uint64_t i = 0; i < page_count; i++) {
+        uint64_t v = virt + i * PAGE_SIZE;
+        uint64_t *pte = walk_to_pte(pml4, v, false);
+        if (pte && (*pte & PTE_PRESENT)) {
+            *pte = 0;
+            vmm_invlpg(v);
+        }
     }
 }
