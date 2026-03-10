@@ -165,23 +165,6 @@ Task *task_create_user(const char *name, uint64_t entry_va, void *aspace)
     return t;
 }
 
-void task_destroy(Task *t)
-{
-    if (!t || t == s_current) return;
-
-    // Unlink from circular list
-    Task *prev = s_current;
-    int limit = TASK_MAX;
-    while (prev->next != t && prev->next != s_current && limit-- > 0)
-        prev = prev->next;
-    if (prev->next == t)
-        prev->next = t->next;
-
-    if (t->kstack) { kfree(t->kstack); t->kstack = NULL; }
-    t->state = TASK_UNUSED;
-    kprintf("[task] destroyed '%s' (pid %u)\r\n", t->name, t->pid);
-}
-
 Task *task_current(void) { return s_current; }
 
 Task *task_find(uint32_t pid)

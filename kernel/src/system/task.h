@@ -58,7 +58,6 @@ typedef struct Task {
 void  task_init(void);
 Task *task_create(const char *name, void (*entry)(void));
 Task *task_create_user(const char *name, uint64_t entry_va, void *aspace);
-void  task_destroy(Task *t);
 Task *task_current(void);
 Task *task_find(uint32_t pid);
 
