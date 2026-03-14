@@ -4,9 +4,6 @@ all: iso
 kernel:
 	make -C kernel
 
-libc:
-	make -C libc
-
 modules:
 	make -C modules
 
@@ -34,6 +31,5 @@ iso: limine libc kernel modules
 .PHONY: clean
 clean:
 	make -C kernel clean
-	make -C libc clean
 	make -C modules clean
 	rm -rf iso_root

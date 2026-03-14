@@ -38,3 +38,17 @@ int memcmp(const void *a, const void *b, size_t n)
     }
     return 0;
 }
+
+void *memchr(const void *s, int c, size_t n)
+{
+    const unsigned char *p   = (const unsigned char *)s;
+    const unsigned char  val = (unsigned char)c;
+
+    while (n--) {
+        if (*p == val)
+            return (void *)p;
+        p++;
+    }
+
+    return NULL;
+}

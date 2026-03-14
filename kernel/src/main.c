@@ -92,39 +92,22 @@ static void keyboard_handler(InterruptFrame *frame)
 
 void kputs(const char *str, size_t count)
 {
-    flanterm_write(ft_ctx, str, count);
-}
+    const char *p = str;
+    const char *end = str + count;
 
-static inline uint32_t rgb(uint8_t r, uint8_t g, uint8_t b)
-{
-    return (r << 16) | (g << 8) | b;
-}
-
-static void fill_rect(uint32_t *buffer, uint32_t buffer_width, int x, int y, int w, int h, uint32_t color)
-{
-    for (int j = 0; j < h; j++)
-        for (int i = 0; i < w; i++)
-            buffer[(y + j) * buffer_width + (x + i)] = color;
-}
-
-// this runs WAY FASTER than in userspace
-int main(struct limine_framebuffer *fb)
-{
-    uint32_t *backbuffer = kmalloc(fb->width * fb->height * sizeof(uint32_t));
-    if (!backbuffer) return 1;
-    
-    int i = 0;
-    while (1)
+    while (p < end)
     {
-        uint32_t color = rgb(i, i, i);
-        for (uint32_t j = 0; j < fb->width * fb->height; j++)
-            ((uint32_t *)backbuffer)[j] = color;
-        fill_rect(backbuffer, fb->width, 0, 0, 32, 32, rgb(255, 0, 0));
-        i++;
-        for (uint32_t j = 0; j < fb->width * fb->height; j++)
-            ((uint32_t *)fb->address)[j] = ((uint32_t *)backbuffer)[j];
+        const char *newline = memchr(p, '\n', end - p);
+        if (!newline)
+        {
+            flanterm_write(ft_ctx, p, end - p);
+            break;
+        }
+        if (newline > p)
+            flanterm_write(ft_ctx, p, newline - p);
+        flanterm_write(ft_ctx, "\r\n", 2);
+        p = newline + 1;
     }
-    return 0;
 }
 
 void kernel_main(void)
@@ -154,6 +137,7 @@ void kernel_main(void)
     VNode *root = ramfs_create_root();
     vfs_mount("/", root);
     vfs_mkdir("/modules");
+    vfs_mkdir("/modules/bin");
 
     struct limine_module_response *modules = module_request.response;
     for (uint64_t i = 0; i < modules->module_count; i++)
@@ -179,25 +163,13 @@ void kernel_main(void)
 
     __asm__ volatile("sti");
 
-    const char *gaewrfg = "Hello World\r\n";
-    __asm__ volatile(
-        "int $0x80"
-        :: "a"(SYS_WRITE),              /* rax = syscall number (SYS_WRITE) */
-           "D"(1),              /* rdi = fd (stdout)                */
-           "S"(gaewrfg),           /* rsi = buf                        */
-           "d"(14)               /* rdx = len ("Hello\n" = 6 bytes)  */
-        : "memory"
-    );
-
-
-    Task *test_task = task_exec("/modules/test.elf", "test.elf");
-    if (!test_task) {
-        kprintf("[kernel] Failed to load /modules/test.elf\r\n");
+    task_list();
+    Task *shell = task_exec("/modules/bin/shell.elf", "shell.elf");
+    if (!shell)
+    {
+        kprintf("[kernel] Failed to load /modules/bin/shell.elf\r\n");
     }
 
-    kprintf("\r\n=== Task list before scheduling ===\r\n");
-    task_list();
-    //main(framebuffer); // remove this to run it in userspace instead of kernelspace
     while (1)
     {
         task_reap_dead();

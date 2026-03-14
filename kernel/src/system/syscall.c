@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#define STDIN_FD 0
 #define STDOUT_FD 1
 #define STDERR_FD 2
 
@@ -27,6 +28,7 @@
 
 int64_t k_write(int fd, const char *buf, size_t count)
 {
+    if (fd == STDIN_FD) return -1;
     if (!buf || count == 0) return -1;
 
     if (fd == STDOUT_FD || fd == STDERR_FD)
