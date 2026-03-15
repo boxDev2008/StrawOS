@@ -15,9 +15,7 @@
 
 #include "libk/kprintf.h"
 
-#include "system/syscall.h"
 #include "system/task.h"
-#include "elf.h"
 
 #include "flanterm/flanterm.h"
 #include "flanterm/flanterm_backends/fb.h"
@@ -53,12 +51,8 @@ volatile struct limine_framebuffer_request framebuffer_req = {
     .id = LIMINE_FRAMEBUFFER_REQUEST_ID, .revision = 0
 };
 
-// ── globals ───────────────────────────────────────────────────────────────────
-
 uint64_t g_hhdm_offset;
 static struct flanterm_context *ft_ctx;
-
-// ── helpers ───────────────────────────────────────────────────────────────────
 
 static inline void sse_enable(void) {
     uint64_t cr0, cr4;
@@ -82,14 +76,6 @@ static inline void sse_enable(void) {
     // Nuklear's font baking) produces denormals or other FP edge cases.
     uint32_t mxcsr = 0x1F80;  // IM|DM|ZM|OM|UM|PM all set, rounding = nearest
     __asm__ volatile("ldmxcsr %0" :: "m"(mxcsr));
-}
-
-// ── ELF64 userspace loader ────────────────────────────────────────────────────
-
-static void keyboard_handler(InterruptFrame *frame)
-{
-    uint8_t scancode = inb(0x60);
-    //kprintf("%c", scancode);
 }
 
 void kputs(const char *str, size_t count)
@@ -139,6 +125,7 @@ void kernel_main(void)
     VNode *root = ramfs_create_root();
     vfs_mount("/", root);
     vfs_mkdir("/tmp");
+    vfs_mkdir("/home");
     vfs_mkdir("/modules");
     vfs_mkdir("/modules/bin");
 
@@ -168,10 +155,10 @@ void kernel_main(void)
     __asm__ volatile("sti");
 
     task_list();
-    Task *shell = task_exec("/modules/bin/doomgeneric.elf", "doomgeneric.elf");
+    Task *shell = task_exec("/modules/bin/shell.elf", "shell.elf");
     if (!shell)
     {
-        kprintf("[kernel] Failed to load /modules/bin/doomgeneric.elf\r\n");
+        kprintf("[kernel] Failed to load /modules/bin/shell.elf\r\n");
     }
 
     while (1)

@@ -434,3 +434,37 @@ Task *task_exec(const char *path, const char *name)
 
     return t;
 }
+
+int task_kill(uint32_t pid)
+{
+    if (pid == 0)
+    {
+        kprintf("[task] kill: refused — cannot kill kernel task\r\n");
+        return -1;
+    }
+
+    Task *target = task_find(pid);
+
+    if (!target)
+    {
+        kprintf("[task] kill: pid %u not found\r\n", pid);
+        return -1;
+    }
+
+    if (target->state == TASK_DEAD || target->state == TASK_UNUSED)
+    {
+        kprintf("[task] kill: pid %u already dead\r\n", pid);
+        return -1;
+    }
+
+    if (target == s_current)
+    {
+        kprintf("[task] kill: pid %u is current, calling task_exit\r\n", pid);
+        task_exit();
+    }
+
+    kprintf("[task] kill: marking '%s' (pid %u) DEAD\r\n",
+            target->name, target->pid);
+    target->state = TASK_DEAD;
+    return 0;
+}

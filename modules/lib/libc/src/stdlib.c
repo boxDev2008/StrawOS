@@ -28,11 +28,6 @@ void abort(void)
     exit(1);
 }
 
-void yield(void)
-{
-    syscall0(SYS_YIELD);
-}
-
 char *getenv(const char *name)
 {
     return NULL;

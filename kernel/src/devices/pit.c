@@ -18,10 +18,8 @@ void pit_init(uint32_t freq)
     irq_register(0, pit_handler);
 
     outb(0x43, 0x36);
-
-    // Send divisor
-    outb(0x40, divisor & 0xFF);        // low byte
-    outb(0x40, (divisor >> 8) & 0xFF); // high byte
+    outb(0x40, divisor & 0xFF);
+    outb(0x40, (divisor >> 8) & 0xFF);
 }
 
 uint64_t pit_get_ticks(void)

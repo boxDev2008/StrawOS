@@ -4,9 +4,117 @@
 #include <memory.h>
 
 #include "memory/heap.h"
+#include "system/task.h"
 
 static Mount    g_mounts[VFS_MOUNT_MAX];
 static OpenFile *g_fds[VFS_FD_MAX];
+
+/*
+ * path_normalize - collapse "." and ".." components in an absolute path.
+ *
+ * Operates in-place on a buffer that already holds an absolute path
+ * (must start with '/').  Segments are resolved left-to-right:
+ *   "."  -> skip
+ *   ".." -> pop the last segment (clamp at root)
+ * The result is always a valid absolute path with no trailing slash
+ * (except for the root itself).
+ */
+static void path_normalize(char *buf)
+{
+    /* We build the result into a small stack of segment-end pointers so
+     * we can "pop" the last segment when we see "..".             */
+#define NORM_MAX_DEPTH 64
+    char *segs[NORM_MAX_DEPTH];   /* points to the '/' before each segment */
+    int   depth = 0;
+
+    char tmp[VFS_PATH_MAX];
+    size_t tlen = strlen(buf);
+    if (tlen >= VFS_PATH_MAX) { buf[0] = '/'; buf[1] = '\0'; return; }
+    memcpy(tmp, buf, tlen + 1);
+
+    /* Output cursor — we write the canonical path back into buf. */
+    char *out = buf;
+    *out = '\0';
+
+    char *p = tmp;
+    while (*p) {
+        /* skip slashes */
+        while (*p == '/') p++;
+        if (*p == '\0') break;
+
+        /* find end of component */
+        char *start = p;
+        while (*p && *p != '/') p++;
+        size_t clen = (size_t)(p - start);
+
+        if (clen == 1 && start[0] == '.') {
+            /* "." — skip */
+            continue;
+        }
+        if (clen == 2 && start[0] == '.' && start[1] == '.') {
+            /* ".." — pop last segment */
+            if (depth > 0) {
+                out = segs[--depth];
+                *out = '\0';
+            }
+            /* if already at root, stay at root */
+            continue;
+        }
+
+        /* normal component — append "/name" */
+        if (depth < NORM_MAX_DEPTH)
+            segs[depth++] = out;    /* remember where this segment starts */
+        *out++ = '/';
+        memcpy(out, start, clen);
+        out += clen;
+        *out = '\0';
+    }
+
+    /* empty result means root */
+    if (buf[0] == '\0') { buf[0] = '/'; buf[1] = '\0'; }
+#undef NORM_MAX_DEPTH
+}
+
+/*
+ * vfs_resolve_path - resolve a possibly-relative path into an absolute,
+ *                    normalised path (. and .. collapsed).
+ *
+ * If `path` starts with '/' it is already absolute; copy it straight.
+ * Otherwise prepend the current task's cwd.
+ * Returns 0 on success, -EINVAL if the result would overflow.
+ */
+static int vfs_resolve_path(const char *path, char *buf, size_t bufsz)
+{
+    if (!path || !buf || bufsz == 0) return -EINVAL;
+
+    if (path[0] == '/') {
+        /* Already absolute. */
+        size_t len = strlen(path);
+        if (len >= bufsz) return -EINVAL;
+        memcpy(buf, path, len + 1);
+    } else {
+        /* Relative: prepend current task's cwd. */
+        Task *t = task_current();
+        const char *cwd = (t && t->cwd[0]) ? t->cwd : "/";
+
+        size_t cwd_len  = strlen(cwd);
+        size_t path_len = strlen(path);
+
+        /* We need: cwd + '/' + path + NUL */
+        size_t need = cwd_len + 1 + path_len + 1;
+        if (need > bufsz) return -EINVAL;
+
+        memcpy(buf, cwd, cwd_len);
+        /* Avoid double slash when cwd is "/" */
+        if (cwd_len > 0 && cwd[cwd_len - 1] != '/')
+            buf[cwd_len++] = '/';
+        memcpy(buf + cwd_len, path, path_len + 1);
+    }
+
+    /* Collapse any . and .. components now, before vfs_lookup sees them. */
+    path_normalize(buf);
+    return 0;
+}
 
 static volatile int g_lock;
 static inline void vfs_lock(void)   { while (__atomic_test_and_set(&g_lock, __ATOMIC_ACQUIRE)); }
@@ -93,7 +201,11 @@ static Mount *find_mount(const char *path)
 
 int vfs_lookup(const char *path, VNode **out)
 {
-    if (!path || path[0] != '/') return -EINVAL;
+    char abspath[VFS_PATH_MAX];
+    if (vfs_resolve_path(path, abspath, sizeof(abspath)) != 0) return -EINVAL;
+    path = abspath;
+
+    if (path[0] != '/') return -EINVAL;
 
     vfs_lock();
     Mount *m = find_mount(path);
@@ -121,11 +233,9 @@ int vfs_lookup(const char *path, VNode **out)
 
         if (strcmp(component, ".") == 0) continue;
 
-        /* ".." navigation: walk up via mount root (best-effort, no parent pointer) */
+        /* ".." is collapsed by path_normalize before we get here.
+         * Handle defensively: just continue rather than error. */
         if (strcmp(component, "..") == 0) {
-            if (cur != m->root)
-                /* Full ".." support would need parent pointers; skip for simplicity. */
-                { vnode_unref(cur); return -EINVAL; }
             continue;
         }
 
@@ -183,6 +293,10 @@ static OpenFile *get_fd(int fd)
 
 int vfs_open(const char *path, int flags)
 {
+    char abspath[VFS_PATH_MAX];
+    if (vfs_resolve_path(path, abspath, sizeof(abspath)) != 0) return -EINVAL;
+    path = abspath;
+
     VNode *node = NULL;
     int err = vfs_lookup(path, &node);
 
@@ -302,8 +416,10 @@ int64_t vfs_seek(int fd, int64_t offset, int whence)
 
 int vfs_stat(const char *path, VStat *out)
 {
+    char abspath[VFS_PATH_MAX];
+    if (vfs_resolve_path(path, abspath, sizeof(abspath)) != 0) return -EINVAL;
     VNode *node;
-    int err = vfs_lookup(path, &node);
+    int err = vfs_lookup(abspath, &node);
     if (err) return err;
     err = node->ops->stat(node, out);
     vnode_unref(node);
@@ -321,6 +437,10 @@ int vfs_fstat(int fd, VStat *out)
 
 int vfs_mkdir(const char *path)
 {
+    char abspath[VFS_PATH_MAX];
+    if (vfs_resolve_path(path, abspath, sizeof(abspath)) != 0) return -EINVAL;
+    path = abspath;
+
     char parent[VFS_PATH_MAX];
     const char *base;
     int err = split_path(path, parent, sizeof(parent), &base);
@@ -340,6 +460,10 @@ int vfs_mkdir(const char *path)
 
 int vfs_remove(const char *path)
 {
+    char abspath[VFS_PATH_MAX];
+    if (vfs_resolve_path(path, abspath, sizeof(abspath)) != 0) return -EINVAL;
+    path = abspath;
+
     char parent[VFS_PATH_MAX];
     const char *base;
     int err = split_path(path, parent, sizeof(parent), &base);
@@ -364,6 +488,12 @@ int vfs_readdir(int fd, uint64_t index, VDirent *out)
 int vfs_rename(const char *src, const char *dst)
 {
     if (!src || !dst) return -EINVAL;
+
+    char abs_src[VFS_PATH_MAX], abs_dst[VFS_PATH_MAX];
+    if (vfs_resolve_path(src, abs_src, sizeof(abs_src)) != 0) return -EINVAL;
+    if (vfs_resolve_path(dst, abs_dst, sizeof(abs_dst)) != 0) return -EINVAL;
+    src = abs_src;
+    dst = abs_dst;
 
     /* Trivial self-rename. */
     if (strcmp(src, dst) == 0) return 0;
@@ -461,4 +591,60 @@ out_dirs:
     vnode_unref(dst_dir);
     vnode_unref(src_dir);
     return err;
+}
+
+/* ---------- chdir / getcwd ---------- */
+
+/*
+ * vfs_chdir - change the current task's working directory.
+ *
+ * Resolves `path` (may be relative), verifies it exists and is a directory,
+ * then stores the canonical absolute path in the current task's cwd field.
+ */
+int vfs_chdir(const char *path)
+{
+    if (!path) return -EINVAL;
+
+    /* Resolve to absolute path. */
+    char abspath[VFS_PATH_MAX];
+    if (vfs_resolve_path(path, abspath, sizeof(abspath)) != 0) return -EINVAL;
+
+    /* Verify the target exists and is a directory. */
+    VNode *node = NULL;
+    int err = vfs_lookup(abspath, &node);
+    if (err) return err;
+
+    if (node->type != VNODE_DIR) {
+        vnode_unref(node);
+        return -ENOTDIR;
+    }
+    vnode_unref(node);
+
+    /* Strip trailing slash (unless it IS the root). */
+    size_t len = strlen(abspath);
+    while (len > 1 && abspath[len - 1] == '/')
+        abspath[--len] = '\0';
+
+    /* Store in the current task. */
+    Task *t = task_current();
+    if (!t) return -EINVAL;
+
+    if (len >= sizeof(t->cwd)) return -EINVAL;
+    memcpy(t->cwd, abspath, len + 1);
+    return 0;
+}
+
+int vfs_getcwd(char *buf, size_t size)
+{
+    if (!buf || size == 0) return -EINVAL;
+
+    Task *t = task_current();
+    if (!t) return -EINVAL;
+
+    const char *cwd = (t->cwd[0]) ? t->cwd : "/";
+    size_t len = strlen(cwd);
+    if (len + 1 > size) return -EINVAL;
+
+    memcpy(buf, cwd, len + 1);
+    return 0;
 }

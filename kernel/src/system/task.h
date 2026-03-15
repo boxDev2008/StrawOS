@@ -50,6 +50,9 @@ typedef struct Task {
     uint64_t    brk_base;
     uint64_t    mmap_next;
 
+    // Working directory (absolute path, always starts with '/')
+    char        cwd[512];
+
     struct Task *next;      // intrusive circular linked list
 } __attribute__((aligned(16))) Task;
 
@@ -72,3 +75,4 @@ void  task_reap_dead(void);
 
 void  task_list(void);
 Task *task_exec(const char *path, const char *name);
+int task_kill(uint32_t pid);

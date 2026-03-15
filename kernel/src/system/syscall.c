@@ -14,6 +14,32 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#define SYS_EXIT    1
+#define SYS_READ    3
+#define SYS_WRITE   4
+#define SYS_OPEN    5
+#define SYS_CLOSE   6
+#define SYS_SEEK    7
+#define SYS_STAT    8
+#define SYS_FSTAT   9
+#define SYS_MKDIR   10
+#define SYS_REMOVE  11
+#define SYS_RENAME  12
+#define SYS_CHDIR   13
+#define SYS_GETCWD  14
+#define SYS_READDIR 15
+
+#define SYS_SPAWN   18
+#define SYS_KILL    19
+#define SYS_GETPID  20
+#define SYS_YIELD   30
+
+#define SYS_MMAP    41
+#define SYS_MUNMAP  42
+
+#define SYS_DEVICE  50
+#define SYS_TIME    51
+
 #define STDIN_FD 0
 #define STDOUT_FD 1
 #define STDERR_FD 2
@@ -90,6 +116,31 @@ int64_t k_remove(const char *path)
 int64_t k_rename(const char *oldpath, const char *newpath)
 {
     return (int64_t)vfs_rename(oldpath, newpath);
+}
+
+int64_t k_chdir(const char *path)
+{
+    return (int64_t)vfs_chdir(path);
+}
+
+int64_t k_getcwd(char *buf, size_t size)
+{
+    return (int64_t)vfs_getcwd(buf, size);
+}
+
+int64_t k_readdir(int fd, uint64_t index, void *out)
+{
+    return (int64_t)vfs_readdir(fd, index, (VDirent *)out);
+}
+
+int64_t k_spawn(const char *path)
+{
+    return (int64_t)task_exec(path, NULL);
+}
+
+int64_t k_kill(int pid)
+{
+    return (int64_t)task_kill(pid);
 }
 
 int64_t k_getpid(void)
@@ -289,6 +340,26 @@ void syscall_int80_handler(InterruptFrame *frame)
 
         case SYS_RENAME:
             ret = k_rename((const char *)(uintptr_t)arg0, (const char *)(uintptr_t)arg1);
+            break;
+
+        case SYS_CHDIR:
+            ret = k_chdir((const char *)(uintptr_t)arg0);
+            break;
+
+        case SYS_GETCWD:
+            ret = k_getcwd((char *)(uintptr_t)arg0, (size_t)arg1);
+            break;
+
+        case SYS_READDIR:
+            ret = k_readdir((int)arg0, (uint64_t)arg1, (void *)(uintptr_t)arg2);
+            break;
+        
+        case SYS_SPAWN:
+            ret = k_spawn((const char *)(uintptr_t)arg0);
+            break;
+
+        case SYS_KILL:
+            ret = k_kill((int)arg0);
             break;
 
         case SYS_GETPID:

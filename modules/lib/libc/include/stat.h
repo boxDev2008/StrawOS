@@ -15,9 +15,3 @@ struct stat
     enum stat_type st_type;
     uint64_t    st_size;
 };
-
-struct dirent
-{
-    enum stat_type d_type;
-    char        d_name[256];
-};

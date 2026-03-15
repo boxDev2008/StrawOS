@@ -48,8 +48,8 @@ uint32_t DG_GetTicksMs(void)
 void DG_SleepMs(uint32_t ms)
 {
 	uint32_t start = DG_GetTicksMs();
-    while (DG_GetTicksMs() - start < ms)
-        yield();
+    while (DG_GetTicksMs() - start < ms);
+        //yield();
 }
 
 static unsigned char scancode_to_doom(uint8_t sc)
@@ -149,8 +149,6 @@ int main(void)
 
     char *argv[3] = {"doomgeneric", "-iwad", "/modules/doom1.wad"};
     doomgeneric_Create(3, argv);
-
-    printf("Hi :3\n");
 
     while (1)
     {

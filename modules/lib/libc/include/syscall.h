@@ -14,9 +14,13 @@
 #define SYS_MKDIR   10
 #define SYS_REMOVE  11
 #define SYS_RENAME  12
+#define SYS_CHDIR   13
+#define SYS_GETCWD  14
+#define SYS_READDIR 15
 
+#define SYS_SPAWN   18
+#define SYS_KILL    19
 #define SYS_GETPID  20
-
 #define SYS_YIELD   30
 
 #define SYS_MMAP    41

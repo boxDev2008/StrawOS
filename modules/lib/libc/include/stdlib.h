@@ -21,7 +21,6 @@ void  *realloc(void *ptr, size_t size);
 
 void   abort(void);
 int    exit(int code);
-void   yield(void);
 
 char *getenv(const char *name);
 int system(const char *command);
