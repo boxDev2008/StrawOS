@@ -1,6 +1,5 @@
 #pragma once
 
-#include <stdbool.h>
 #include <syscall.h>
 
 #define DEVICE_FRAMEBUFFER 0
