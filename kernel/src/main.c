@@ -22,6 +22,8 @@
 #include "flanterm/flanterm.h"
 #include "flanterm/flanterm_backends/fb.h"
 
+#include "devices/pit.h"
+#include "devices/ps2keyboard.h"
 #include "devices/ps2mouse.h"
 
 __attribute__((used, section(".requests")))
@@ -136,6 +138,7 @@ void kernel_main(void)
 
     VNode *root = ramfs_create_root();
     vfs_mount("/", root);
+    vfs_mkdir("/tmp");
     vfs_mkdir("/modules");
     vfs_mkdir("/modules/bin");
 
@@ -158,16 +161,17 @@ void kernel_main(void)
 
     task_init();
 
-    irq_register(1, keyboard_handler);
+    pit_init(1000);
+    ps2keyboard_init();
     ps2mouse_init(framebuffer->width, framebuffer->height);
 
     __asm__ volatile("sti");
 
     task_list();
-    Task *shell = task_exec("/modules/bin/shell.elf", "shell.elf");
+    Task *shell = task_exec("/modules/bin/doomgeneric.elf", "doomgeneric.elf");
     if (!shell)
     {
-        kprintf("[kernel] Failed to load /modules/bin/shell.elf\r\n");
+        kprintf("[kernel] Failed to load /modules/bin/doomgeneric.elf\r\n");
     }
 
     while (1)

@@ -1,8 +1,10 @@
 #pragma once
 
-#include "syscall.h"
+#include <stdbool.h>
+#include <syscall.h>
 
 #define DEVICE_FRAMEBUFFER 0
+#define DEVICE_PS2KEYBOARD 1
 #define DEVICE_PS2MOUSE 2
 
 typedef struct FramebufferDevice

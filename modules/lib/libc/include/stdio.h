@@ -13,37 +13,11 @@
 #define O_APPEND    0x400
 #define O_DIRECTORY 0x10000
 
-#define S_TYPE_FILE 1
-#define S_TYPE_DIR 2
-#define S_TYPE_SYMLINK 3
-
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
 
 #define BUFSIZ 512
-
-typedef enum
-{
-    STAT_FILE = 1,
-    STAT_DIR  = 2
-}
-stat_type_t;
-
-typedef struct stat
-{
-    uint64_t    st_ino;
-    stat_type_t st_type;
-    uint64_t    st_size;
-}
-stat_t;
-
-typedef struct dirent
-{
-    stat_type_t d_type;
-    char        d_name[256];
-}
-dirent_t;
 
 #define FILE_BUF_SIZE  4096
 #define EOF            (-1)
@@ -97,6 +71,12 @@ int fputc(int c, FILE *f);
 
 int ungetc(int c, FILE *f);
 
+int mkdir(const char *pathname, unsigned int mode);
+int remove(const char *path);
+int rename(const char *from, const char *to);
+
+int putchar(int c);
+
 char *fgets(char *s, int n, FILE *f);
 int fputs(const char *s, FILE *f);
 int puts(const char *s);
@@ -109,6 +89,8 @@ void clearerr(FILE *f);
 
 int vfprintf(FILE *f, const char *fmt, va_list ap);
 int fprintf(FILE *f, const char *fmt, ...);
+
+int sscanf(const char *buf, const char *fmt, ...);
 
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t size, const char *fmt, ...);

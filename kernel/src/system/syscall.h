@@ -11,6 +11,9 @@
 #define SYS_SEEK    7
 #define SYS_STAT    8
 #define SYS_FSTAT   9
+#define SYS_MKDIR   10
+#define SYS_REMOVE  11
+#define SYS_RENAME  12
 
 #define SYS_GETPID  20
 #define SYS_YIELD   30
@@ -19,3 +22,4 @@
 #define SYS_MUNMAP  42
 
 #define SYS_DEVICE  50
+#define SYS_TIME    51

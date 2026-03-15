@@ -168,7 +168,7 @@ static void mouse_irq_handler(InterruptFrame *frame)
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
 
-MouseState *ps2mouse_state(void)
+const MouseState *ps2mouse_get_state(void)
 {
     return &g_mouse;
 }

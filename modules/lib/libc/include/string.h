@@ -24,10 +24,7 @@ size_t strspn(const char *s, const char *accept);
 size_t strcspn(const char *s, const char *reject);
 char *strtok_r(char *s, const char *delim, char **saveptr);
 char *strtok(char *s, const char *delim);
-long strtol(const char *s, char **endptr, int base);
-unsigned long strtoul(const char *s, char **endptr, int base);
-double strtod(const char *s, char **endptr);
-float strtof(const char *s, char **endptr);
+
 int strcoll(const char *a, const char *b);
 size_t strxfrm(char *dst, const char *src, size_t n);
 char *strdup(const char *s);

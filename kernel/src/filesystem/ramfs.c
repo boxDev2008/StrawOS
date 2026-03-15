@@ -276,11 +276,71 @@ static void ramfs_release(VNode *node)
     kfree(node);
 }
 
+/*
+ * ramfs_rename -- relink src_name in src_dir as dst_name in dst_dir.
+ *
+ * vfs_rename guarantees by the time we are called:
+ *   - Both directories are on the same mount.
+ *   - Any pre-existing entry at (dst_dir, dst_name) has already been removed.
+ *   - Same-inode self-renames were short-circuited by the caller.
+ *
+ * We therefore only need to:
+ *   1. Find and detach the entry from src_dir (without dropping the vnode).
+ *   2. Rename it and prepend it to dst_dir's entry list.
+ *
+ * Both directory locks are acquired in pointer order to prevent deadlock
+ * in the same-directory case (sri == dri).
+ */
+static int ramfs_rename(VNode *src_dir, const char *src_name,
+                        VNode *dst_dir, const char *dst_name)
+{
+    RamInode *sri = (RamInode *)src_dir->fs_data;
+    RamInode *dri = (RamInode *)dst_dir->fs_data;
+
+    /* Lock in stable pointer order to avoid ABBA deadlock. */
+    RamInode *first  = (sri <= dri) ? sri : dri;
+    RamInode *second = (sri <= dri) ? dri : sri;
+
+    inode_lock(first);
+    if (first != second) inode_lock(second);
+
+    /* Detach the entry from the source directory. */
+    RamDirEntry *ent = NULL;
+    for (RamDirEntry **pp = &sri->entries; *pp; pp = &(*pp)->next) {
+        if (strcmp((*pp)->name, src_name) == 0) {
+            ent = *pp;
+            *pp = ent->next;
+            sri->entry_count--;
+            break;
+        }
+    }
+
+    if (!ent) {
+        if (first != second) inode_unlock(second);
+        inode_unlock(first);
+        return -ENOENT;
+    }
+
+    /* Rewrite the name and link into the destination directory.
+     * The existing vnode_ref (held since dir_add_entry) is transferred;
+     * no additional ref/unref is required. */
+    strncpy(ent->name, dst_name, VFS_NAME_MAX);
+    ent->name[VFS_NAME_MAX] = '\0';
+    ent->next    = dri->entries;
+    dri->entries = ent;
+    dri->entry_count++;
+
+    if (first != second) inode_unlock(second);
+    inode_unlock(first);
+    return 0;
+}
+
 static VNodeOps g_ramfs_ops = {
     .lookup  = ramfs_lookup,
     .create  = ramfs_create,
     .mkdir   = ramfs_mkdir,
     .remove  = ramfs_remove,
+    .rename  = ramfs_rename,
     .read    = ramfs_read,
     .write   = ramfs_write,
     .stat    = ramfs_stat,

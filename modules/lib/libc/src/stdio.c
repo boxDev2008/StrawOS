@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
+#include <stat.h>
 #include <syscall.h>
+#include <stdlib.h>
 
 static FILE _stdin  = { .fd = 0 };
 static FILE _stdout = { .fd = 1 };
@@ -35,12 +37,12 @@ int seek(int fd, int64_t offset, int whence)
     return (int)syscall3(SYS_SEEK, (uint64_t)fd, (uint64_t)offset, (uint64_t)whence);
 }
 
-int stat(const char *path, stat_t *statbuf)
+int stat(const char *path, struct stat *statbuf)
 {
     return (int)syscall2(SYS_STAT, (uint64_t)path, (uint64_t)statbuf);
 }
 
-int fstat(int fd, stat_t *statbuf)
+int fstat(int fd, struct stat *statbuf)
 {
     return (int)syscall2(SYS_FSTAT, (uint64_t)fd, (uint64_t)statbuf);
 }
@@ -81,71 +83,64 @@ static int _fill(FILE *f)
     f->rlen = n;
     return n;
 }
- 
-/* malloc / free shims – replace with your own allocator if needed.
-   Here we use a tiny bump allocator backed by a static pool so the
-   implementation has zero external dependencies.                       */
-#define MAX_FILES   64
-#define POOL_SIZE   (sizeof(FILE) * MAX_FILES)
- 
-static char  _pool[POOL_SIZE];
-static int   _pool_used = 0;
- 
-static FILE *_alloc_file(void)
+
+int mkdir(const char *pathname, unsigned int mode)
 {
-    if (_pool_used + (int)sizeof(FILE) > (int)POOL_SIZE)
-        return NULL;
-    FILE *f = (FILE *)(_pool + _pool_used);
-    _pool_used += sizeof(FILE);
-    /* zero-initialise */
-    for (size_t i = 0; i < sizeof(FILE); i++)
-        ((char *)f)[i] = 0;
-    return f;
+    return (int)syscall2(SYS_MKDIR, (uint64_t)pathname, (uint64_t)mode);
+}
+
+int remove(const char *path)
+{
+    return (int)syscall1(SYS_REMOVE, (uint64_t)path);
+}
+
+int rename(const char *from, const char *to)
+{
+    return (int)syscall2(SYS_RENAME, (uint64_t)from, (uint64_t)to);
 }
  
-/* We do not support runtime free in this minimal allocator;
-   fclose just zeroes the struct and marks fd = -1.            */
- 
-/* ------------------------------------------------------------------ */
-/*  fopen                                                              */
-/* ------------------------------------------------------------------ */
 FILE *fopen(const char *path, const char *mode)
 {
     if (!path || !mode)
         return NULL;
- 
+
     int flags = 0;
- 
-    /* parse mode string */
     int plus = 0;
     for (const char *m = mode; *m; m++)
         if (*m == '+') { plus = 1; break; }
- 
+
     switch (mode[0]) {
-    case 'r':
-        flags = plus ? O_RDWR : O_RDONLY;
-        break;
-    case 'w':
-        flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC;
-        break;
-    case 'a':
-        flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND;
-        break;
-    default:
-        return NULL;
+    case 'r': flags = plus ? O_RDWR : O_RDONLY;                         break;
+    case 'w': flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC;  break;
+    case 'a': flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND; break;
+    default:  return NULL;
     }
- 
+
     int fd = open(path, flags);
     if (fd < 0)
         return NULL;
- 
-    FILE *f = _alloc_file();
+
+    FILE *f = malloc(sizeof(FILE));
     if (!f) {
         close(fd);
         return NULL;
     }
+    memset(f, 0, sizeof(FILE));
     f->fd = fd;
     return f;
+}
+
+int fclose(FILE *f)
+{
+    if (!f || f->fd < 0)
+        return EOF;
+
+    int rc = _flush(f);
+    if (close(f->fd) != 0)
+        rc = EOF;
+
+    free(f);   /* was: invalidate-in-place, now actually free */
+    return rc;
 }
 
 FILE *freopen(const char *path, const char *mode, FILE *f)
@@ -196,25 +191,7 @@ FILE *freopen(const char *path, const char *mode, FILE *f)
     f->fd = fd;
     return f;
 }
- 
-/* ------------------------------------------------------------------ */
-/*  fclose                                                             */
-/* ------------------------------------------------------------------ */
-int fclose(FILE *f)
-{
-    if (!f || f->fd < 0)
-        return EOF;
- 
-    int rc = _flush(f);
-    if (close(f->fd) != 0)
-        rc = EOF;
- 
-    /* invalidate */
-    f->fd    = -1;
-    f->error =  1;
-    return rc;
-}
- 
+
 /* ------------------------------------------------------------------ */
 /*  fflush                                                             */
 /* ------------------------------------------------------------------ */
@@ -378,7 +355,12 @@ int puts(const char *s)
     if (fputs(s, stdout) == EOF) return EOF;
     return fputc('\n', stdout);
 }
- 
+
+int putchar(int c)
+{
+    return fputc(c, stdout);
+}
+
 /* ------------------------------------------------------------------ */
 /*  fseek / ftell / rewind                                             */
 /* ------------------------------------------------------------------ */
@@ -456,6 +438,242 @@ int fprintf(FILE *f, const char *fmt, ...)
     return n;
 }
 
+int sscanf(const char *buf, const char *fmt, ...)
+{
+    if (!buf || !fmt) return EOF;
+
+    va_list ap;
+    va_start(ap, fmt);
+
+    int assigned = 0;
+    const char *b = buf;
+
+    for (; *fmt; fmt++) {
+        /* Match literal whitespace: skip all whitespace in input */
+        if (*fmt == ' ' || *fmt == '\t' || *fmt == '\n') {
+            while (*b == ' ' || *b == '\t' || *b == '\n') b++;
+            continue;
+        }
+
+        /* Match literal non-% character */
+        if (*fmt != '%') {
+            if (*b != *fmt) goto done;
+            b++;
+            continue;
+        }
+
+        fmt++; /* skip '%' */
+
+        /* Suppress assignment flag */
+        int suppress = 0;
+        if (*fmt == '*') { suppress = 1; fmt++; }
+
+        /* Field width */
+        int width = 0;
+        while (*fmt >= '0' && *fmt <= '9')
+            width = width * 10 + (*fmt++ - '0');
+
+        /* Length modifier */
+        int is_long = 0, is_longlong = 0, is_short = 0;
+        if (*fmt == 'h') { is_short = 1; fmt++; }
+        else if (*fmt == 'l') { is_long = 1; fmt++; }
+        if (*fmt == 'l') { is_longlong = 1; is_long = 0; fmt++; }
+
+        char spec = *fmt;
+
+        /* %% — match a literal percent */
+        if (spec == '%') {
+            if (*b != '%') goto done;
+            b++;
+            continue;
+        }
+
+        /* Skip leading whitespace for most specifiers */
+        if (spec != 'c' && spec != '[') {
+            while (*b == ' ' || *b == '\t' || *b == '\n') b++;
+        }
+
+        if (!*b) goto done;
+
+        switch (spec) {
+
+        /* ---- %d / %i ---- */
+        case 'd':
+        case 'i': {
+            const char *start = b;
+            int neg = 0;
+            int base = (spec == 'i') ? 0 : 10;
+
+            if (*b == '+') b++;
+            else if (*b == '-') { neg = 1; b++; }
+
+            /* Auto-detect base for %i */
+            if (base == 0) {
+                if (*b == '0') {
+                    b++;
+                    if (*b == 'x' || *b == 'X') { base = 16; b++; }
+                    else base = 8;
+                } else base = 10;
+            }
+
+            const char *num_start = b;
+            long long val = 0;
+            int digits = 0;
+            int lim = width ? width - (int)(b - start) : INT_MAX;
+
+            while (digits < lim && *b) {
+                int d;
+                if (*b >= '0' && *b <= '9')      d = *b - '0';
+                else if (*b >= 'a' && *b <= 'f') d = *b - 'a' + 10;
+                else if (*b >= 'A' && *b <= 'F') d = *b - 'A' + 10;
+                else break;
+                if (d >= base) break;
+                val = val * base + d;
+                b++; digits++;
+            }
+
+            if (b == num_start) goto done; /* no digits consumed */
+            if (neg) val = -val;
+
+            if (!suppress) {
+                if (is_longlong)     *va_arg(ap, long long *)      = val;
+                else if (is_long)    *va_arg(ap, long *)           = (long)val;
+                else if (is_short)   *va_arg(ap, short *)          = (short)val;
+                else                 *va_arg(ap, int *)             = (int)val;
+                assigned++;
+            }
+            break;
+        }
+
+        /* ---- %u / %o / %x / %X ---- */
+        case 'u':
+        case 'o':
+        case 'x':
+        case 'X': {
+            int base = (spec == 'o') ? 8 : (spec == 'u') ? 10 : 16;
+            /* consume optional 0x prefix for hex */
+            const char *start = b;
+            if (base == 16 && *b == '0' && (*(b+1)=='x' || *(b+1)=='X')) b += 2;
+
+            unsigned long long val = 0;
+            int digits = 0;
+            int lim = width ? width - (int)(b - start) : INT_MAX;
+
+            while (digits < lim && *b) {
+                int d;
+                if (*b >= '0' && *b <= '9')      d = *b - '0';
+                else if (*b >= 'a' && *b <= 'f') d = *b - 'a' + 10;
+                else if (*b >= 'A' && *b <= 'F') d = *b - 'A' + 10;
+                else break;
+                if (d >= base) break;
+                val = val * base + d;
+                b++; digits++;
+            }
+
+            if (!digits) goto done;
+
+            if (!suppress) {
+                if (is_longlong)     *va_arg(ap, unsigned long long *) = val;
+                else if (is_long)    *va_arg(ap, unsigned long *)      = (unsigned long)val;
+                else if (is_short)   *va_arg(ap, unsigned short *)     = (unsigned short)val;
+                else                 *va_arg(ap, unsigned int *)       = (unsigned int)val;
+                assigned++;
+            }
+            break;
+        }
+
+        /* ---- %s ---- */
+        case 's': {
+            int count = 0;
+            int lim = width ? width : INT_MAX;
+            char *dst = suppress ? NULL : va_arg(ap, char *);
+
+            while (count < lim && *b &&
+                   *b != ' ' && *b != '\t' && *b != '\n') {
+                if (dst) dst[count] = *b;
+                b++; count++;
+            }
+
+            if (!count) goto done;
+            if (dst) { dst[count] = '\0'; assigned++; }
+            break;
+        }
+
+        /* ---- %c ---- */
+        case 'c': {
+            int lim = width ? width : 1;
+            char *dst = suppress ? NULL : va_arg(ap, char *);
+
+            int count = 0;
+            while (count < lim && *b) {
+                if (dst) dst[count] = *b;
+                b++; count++;
+            }
+
+            if (!count) goto done;
+            if (!suppress) assigned++;
+            break;
+        }
+
+        /* ---- %n ---- */
+        case 'n': {
+            if (!suppress) {
+                *va_arg(ap, int *) = (int)(b - buf);
+                /* %n does not increment assigned */
+            }
+            break;
+        }
+
+        /* ---- %[ scanset ] ---- */
+        case '[': {
+            fmt++;
+            int negate = 0;
+            if (*fmt == '^') { negate = 1; fmt++; }
+
+            /* build a 256-entry lookup table */
+            unsigned char set[256] = {0};
+            /* a ']' as the very first char (after optional ^) is literal */
+            if (*fmt == ']') { set[(unsigned char)']'] = 1; fmt++; }
+            while (*fmt && *fmt != ']') {
+                if (*(fmt+1) == '-' && *(fmt+2) && *(fmt+2) != ']') {
+                    /* range */
+                    unsigned char lo = (unsigned char)*fmt;
+                    unsigned char hi = (unsigned char)*(fmt+2);
+                    for (unsigned int c = lo; c <= hi; c++) set[c] = 1;
+                    fmt += 3;
+                } else {
+                    set[(unsigned char)*fmt] = 1;
+                    fmt++;
+                }
+            }
+            /* fmt now points to ']' — the outer loop's fmt++ will advance past it */
+
+            int count = 0;
+            int lim   = width ? width : INT_MAX;
+            char *dst = suppress ? NULL : va_arg(ap, char *);
+
+            while (count < lim && *b) {
+                int in_set = set[(unsigned char)*b];
+                if (negate ? in_set : !in_set) break;
+                if (dst) dst[count] = *b;
+                b++; count++;
+            }
+
+            if (!count) goto done;
+            if (dst) { dst[count] = '\0'; assigned++; }
+            break;
+        }
+
+        default:
+            goto done;
+        }
+    }
+
+done:
+    va_end(ap);
+    return assigned;
+}
+
 static void _write_char(char *buf, size_t *pos, size_t size, char c)
 {
     if (*pos + 1 < size)
@@ -509,8 +727,13 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
         int width = 0;
         while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
 
-        /* skip precision */
-        if (*fmt == '.') { fmt++; while (*fmt >= '0' && *fmt <= '9') fmt++; }
+        /* precision: for integers, minimum digits (zero-padded); for strings, max chars */
+        int precision = -1;
+        if (*fmt == '.') {
+            fmt++;
+            precision = 0;
+            while (*fmt >= '0' && *fmt <= '9') { precision = precision * 10 + (*fmt++ - '0'); }
+        }
 
         int is_long = 0, is_longlong = 0;
         if (*fmt == 'l') { is_long = 1; fmt++; }
@@ -523,7 +746,19 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
             break;
         case 's': {
             char *s = va_arg(ap, char *);
-            _write_str(buf, &pos, size, s, width, left);
+            if (!s) s = "(null)";
+            if (precision >= 0) {
+                /* precision = max chars to print */
+                size_t slen = 0;
+                while (slen < (size_t)precision && s[slen]) slen++;
+                if (!left)
+                    for (size_t i = slen; i < (size_t)width; i++) _write_char(buf, &pos, size, ' ');
+                for (size_t i = 0; i < slen; i++) _write_char(buf, &pos, size, s[i]);
+                if (left)
+                    for (size_t i = slen; i < (size_t)width; i++) _write_char(buf, &pos, size, ' ');
+            } else {
+                _write_str(buf, &pos, size, s, width, left);
+            }
             break;
         }
         case 'd': case 'i': {
@@ -532,7 +767,9 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
             else if (is_long)    v = va_arg(ap, long);
             else                 v = va_arg(ap, int);
             if (v < 0) { _write_char(buf, &pos, size, '-'); v = -v; }
-            _write_uint(buf, &pos, size, (unsigned long long)v, 10, 0, width, zero_pad, left);
+            int eff_w = (precision >= 0) ? precision : width;
+            int eff_z = (precision >= 0) ? 1 : zero_pad;
+            _write_uint(buf, &pos, size, (unsigned long long)v, 10, 0, eff_w, eff_z, left);
             break;
         }
         case 'u': {
@@ -540,7 +777,9 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
             if (is_longlong)  v = va_arg(ap, unsigned long long);
             else if (is_long) v = va_arg(ap, unsigned long);
             else              v = va_arg(ap, unsigned int);
-            _write_uint(buf, &pos, size, v, 10, 0, width, zero_pad, left);
+            int eff_w = (precision >= 0) ? precision : width;
+            int eff_z = (precision >= 0) ? 1 : zero_pad;
+            _write_uint(buf, &pos, size, v, 10, 0, eff_w, eff_z, left);
             break;
         }
         case 'x': {
@@ -548,7 +787,9 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
             if (is_longlong)  v = va_arg(ap, unsigned long long);
             else if (is_long) v = va_arg(ap, unsigned long);
             else              v = va_arg(ap, unsigned int);
-            _write_uint(buf, &pos, size, v, 16, 0, width, zero_pad, left);
+            int eff_w = (precision >= 0) ? precision : width;
+            int eff_z = (precision >= 0) ? 1 : zero_pad;
+            _write_uint(buf, &pos, size, v, 16, 0, eff_w, eff_z, left);
             break;
         }
         case 'X': {
@@ -556,7 +797,9 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
             if (is_longlong)  v = va_arg(ap, unsigned long long);
             else if (is_long) v = va_arg(ap, unsigned long);
             else              v = va_arg(ap, unsigned int);
-            _write_uint(buf, &pos, size, v, 16, 1, width, zero_pad, left);
+            int eff_w = (precision >= 0) ? precision : width;
+            int eff_z = (precision >= 0) ? 1 : zero_pad;
+            _write_uint(buf, &pos, size, v, 16, 1, eff_w, eff_z, left);
             break;
         }
         case 'p': {

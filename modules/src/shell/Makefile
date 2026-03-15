@@ -11,7 +11,7 @@ CFLAGS  := \
     -w \
     -ffreestanding \
     -fno-stack-protector \
-    -O3 -Wall \
+    -O2 -Wall \
     -std=c11 \
     -I$(LIB)/libc/include \
     -I$(LIB)/lua/src

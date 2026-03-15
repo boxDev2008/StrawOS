@@ -11,6 +11,9 @@
 #define SYS_SEEK    7
 #define SYS_STAT    8
 #define SYS_FSTAT   9
+#define SYS_MKDIR   10
+#define SYS_REMOVE  11
+#define SYS_RENAME  12
 
 #define SYS_GETPID  20
 
@@ -20,31 +23,9 @@
 #define SYS_MUNMAP  42
 
 #define SYS_DEVICE  50
+#define SYS_TIME    51
 
-inline uint64_t syscall0(uint64_t nr)
-{
-    uint64_t r;
-    __asm__ volatile("int $0x80" : "=a"(r) : "a"(nr) : "memory");
-    return r;
-}
-
-inline uint64_t syscall1(uint64_t nr, uint64_t a0)
-{
-    uint64_t r;
-    __asm__ volatile("int $0x80" : "=a"(r) : "a"(nr), "D"(a0) : "memory");
-    return r;
-}
-
-inline uint64_t syscall2(uint64_t nr, uint64_t a0, uint64_t a1)
-{
-    uint64_t r;
-    __asm__ volatile("int $0x80" : "=a"(r) : "a"(nr), "D"(a0), "S"(a1) : "memory");
-    return r;
-}
-
-inline uint64_t syscall3(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
-{
-    uint64_t r;
-    __asm__ volatile("int $0x80" : "=a"(r) : "a"(nr), "D"(a0), "S"(a1), "d"(a2) : "memory");
-    return r;
-}
+uint64_t syscall0(uint64_t nr);
+uint64_t syscall1(uint64_t nr, uint64_t a0);
+uint64_t syscall2(uint64_t nr, uint64_t a0, uint64_t a1);
+uint64_t syscall3(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2);

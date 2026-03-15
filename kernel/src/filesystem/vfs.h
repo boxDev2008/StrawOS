@@ -40,6 +40,12 @@ struct VNodeOps {
     int     (*create) (VNode *dir,  const char *name, VNode **out);
     int     (*mkdir)  (VNode *dir,  const char *name, VNode **out);
     int     (*remove) (VNode *dir,  const char *name);   /* works for files and dirs */
+    /* rename: relink src_name in src_dir as dst_name in dst_dir.
+     * Called only after vfs_rename has validated types, checked for
+     * cross-mount moves, and already evicted any pre-existing dst entry.
+     * May be NULL; vfs_rename returns -EINVAL for drivers that omit it. */
+    int     (*rename) (VNode *src_dir, const char *src_name,
+                       VNode *dst_dir, const char *dst_name);
     ssize_t (*read)   (VNode *node, void *buf,       size_t len, uint64_t off);
     ssize_t (*write)  (VNode *node, const void *buf, size_t len, uint64_t off);
     int     (*stat)   (VNode *node, VStat *out);
@@ -112,3 +118,4 @@ int     vfs_fstat  (int fd, VStat *out);
 int     vfs_mkdir  (const char *path);
 int     vfs_remove (const char *path);
 int     vfs_readdir(int fd, uint64_t index, VDirent *out);
+int     vfs_rename (const char *src, const char *dst);

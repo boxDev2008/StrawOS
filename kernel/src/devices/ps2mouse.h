@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-typedef struct
+typedef struct MouseState
 {
     int32_t x, y;
     int32_t dx, dy;
@@ -9,5 +9,5 @@ typedef struct
 }
 MouseState;
 
-void        ps2mouse_init(uint32_t screen_w, uint32_t screen_h);
-MouseState *ps2mouse_state(void);
+const MouseState *ps2mouse_get_state(void);
+void ps2mouse_init(uint32_t screen_w, uint32_t screen_h);

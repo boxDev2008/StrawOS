@@ -360,3 +360,105 @@ int vfs_readdir(int fd, uint64_t index, VDirent *out)
     if (f->node->type != VNODE_DIR) return -ENOTDIR;
     return f->node->ops->readdir(f->node, index, out);
 }
+
+int vfs_rename(const char *src, const char *dst)
+{
+    if (!src || !dst) return -EINVAL;
+
+    /* Trivial self-rename. */
+    if (strcmp(src, dst) == 0) return 0;
+
+    /* ---- resolve source parent + base ------------------------------------ */
+    char       src_parent_path[VFS_PATH_MAX];
+    const char *src_base;
+    int err = split_path(src, src_parent_path, sizeof(src_parent_path), &src_base);
+    if (err) return err;
+
+    /* ---- resolve destination parent + base ------------------------------- */
+    char       dst_parent_path[VFS_PATH_MAX];
+    const char *dst_base;
+    err = split_path(dst, dst_parent_path, sizeof(dst_parent_path), &dst_base);
+    if (err) return err;
+
+    /* ---- look up both parent directories --------------------------------- */
+    VNode *src_dir = NULL;
+    err = vfs_lookup(src_parent_path, &src_dir);
+    if (err) return err;
+
+    VNode *dst_dir = NULL;
+    err = vfs_lookup(dst_parent_path, &dst_dir);
+    if (err) { vnode_unref(src_dir); return err; }
+
+    /* Both parents must be directories. */
+    if (src_dir->type != VNODE_DIR || dst_dir->type != VNODE_DIR) {
+        err = -ENOTDIR;
+        goto out_dirs;
+    }
+
+    /* Reject cross-mount renames. */
+    if (src_dir->mount != dst_dir->mount) {
+        err = -EINVAL;
+        goto out_dirs;
+    }
+
+    /* ---- look up the source node ---------------------------------------- */
+    VNode *src_node = NULL;
+    err = src_dir->ops->lookup(src_dir, src_base, &src_node);
+    if (err) goto out_dirs;
+
+    /* ---- handle a pre-existing destination ------------------------------- */
+    VNode *dst_node = NULL;
+    int dst_exists = dst_dir->ops->lookup(dst_dir, dst_base, &dst_node);
+
+    if (dst_exists == 0) {
+        /* src and dst are already the same inode -- nothing to do. */
+        if (dst_node->ino == src_node->ino) {
+            vnode_unref(dst_node);
+            vnode_unref(src_node);
+            err = 0;
+            goto out_dirs;
+        }
+
+        /* Type-compatibility: can't replace a directory with a file or
+         * vice-versa (matches Linux rename(2) behaviour). */
+        if (dst_node->type != src_node->type) {
+            err = (dst_node->type == VNODE_DIR) ? -EISDIR : -ENOTDIR;
+            vnode_unref(dst_node);
+            vnode_unref(src_node);
+            goto out_dirs;
+        }
+
+        /* Destination directory must be empty before it can be replaced. */
+        if (dst_node->type == VNODE_DIR) {
+            VDirent de;
+            if (dst_node->ops->readdir(dst_node, 0, &de) == 1) {
+                vnode_unref(dst_node);
+                vnode_unref(src_node);
+                err = -ENOTEMPTY;
+                goto out_dirs;
+            }
+        }
+
+        vnode_unref(dst_node);
+
+        /* Remove the destination entry so the driver can take its place. */
+        err = dst_dir->ops->remove(dst_dir, dst_base);
+        if (err) { vnode_unref(src_node); goto out_dirs; }
+    }
+    /* else: -ENOENT -- destination slot is free, nothing to evict. */
+
+    vnode_unref(src_node);
+
+    /* ---- delegate the actual relink to the filesystem driver ------------- */
+    if (!src_dir->ops->rename) {
+        err = -EINVAL;
+        goto out_dirs;
+    }
+
+    err = src_dir->ops->rename(src_dir, src_base, dst_dir, dst_base);
+
+out_dirs:
+    vnode_unref(dst_dir);
+    vnode_unref(src_dir);
+    return err;
+}

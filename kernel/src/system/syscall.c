@@ -5,8 +5,11 @@
 #include "memory/pmm.h"
 #include "libk/memory.h"
 #include "filesystem/vfs.h"
-#include "devices/ps2mouse.h"
 #include "arch/x86_64/idt.h"
+
+#include "devices/pit.h"
+#include "devices/ps2keyboard.h"
+#include "devices/ps2mouse.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -20,6 +23,7 @@
 #define MMAP_PROT_WRITE 2
 
 #define DEVICE_FRAMEBUFFER 0
+#define DEVICE_PS2KEYBOARD 1
 #define DEVICE_PS2MOUSE 2
 
 #define USER_MMAP_BASE  0x0000400000000000UL
@@ -71,6 +75,21 @@ int64_t k_stat(const char *path, void *statbuf)
 int64_t k_fstat(int fd, void *statbuf)
 {
     return (int64_t)vfs_fstat(fd, statbuf);
+}
+
+int64_t k_mkdir(const char *path)
+{
+    return (int64_t)vfs_mkdir(path);
+}
+
+int64_t k_remove(const char *path)
+{
+    return (int64_t)vfs_remove(path);
+}
+
+int64_t k_rename(const char *oldpath, const char *newpath)
+{
+    return (int64_t)vfs_rename(oldpath, newpath);
 }
 
 int64_t k_getpid(void)
@@ -197,14 +216,23 @@ int64_t k_device(int device_id, void *data)
         memcpy(data, &_data, sizeof(FramebufferDevice));
         return 0;
     }
+    case DEVICE_PS2KEYBOARD:
+    {
+        return ps2keyboard_poll_scancode((uint8_t*)data);
+    }
     case DEVICE_PS2MOUSE:
     {
-        memcpy(data, ps2mouse_state(), sizeof(MouseState));
+        memcpy(data, ps2mouse_get_state(), sizeof(MouseState));
         return 0;
     }
     default:
         return -1;
     }
+}
+
+int64_t k_time(void)
+{
+    return (int64_t)pit_get_ticks();
 }
 
 void syscall_int80_handler(InterruptFrame *frame)
@@ -251,6 +279,18 @@ void syscall_int80_handler(InterruptFrame *frame)
             ret = k_fstat((int)arg0, (void *)arg1);
             break;
 
+        case SYS_MKDIR:
+            ret = k_mkdir((const char *)(uintptr_t)arg0);
+            break;
+
+        case SYS_REMOVE:
+            ret = k_remove((const char *)(uintptr_t)arg0);
+            break;
+
+        case SYS_RENAME:
+            ret = k_rename((const char *)(uintptr_t)arg0, (const char *)(uintptr_t)arg1);
+            break;
+
         case SYS_GETPID:
             ret = k_getpid();
             break;
@@ -271,6 +311,11 @@ void syscall_int80_handler(InterruptFrame *frame)
         case SYS_DEVICE:
             ret = k_device((int)arg0, (void*)arg1);
             break;
+
+        case SYS_TIME:
+            ret = k_time();
+            break;
+
         default:
             ret = -1;
             break;
