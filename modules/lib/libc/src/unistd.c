@@ -35,6 +35,7 @@ int fstat(int fd, struct stat *statbuf)
 {
     return (int)syscall2(SYS_FSTAT, (uint64_t)fd, (uint64_t)statbuf);
 }
+
 int chdir(const char *path)
 {
     return (int)syscall1(SYS_CHDIR, (uint64_t)path);
@@ -47,9 +48,9 @@ char *getcwd(char *buf, size_t size)
     return buf;
 }
 
-int spawn(const char *path)
+int spawn(const char *path, const char **argv)
 {
-    return (int)syscall1(SYS_SPAWN, (uint64_t)path);
+    return (int)syscall2(SYS_SPAWN, (uint64_t)path, (uint64_t)argv);
 }
 
 int kill(int pid)

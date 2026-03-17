@@ -13,6 +13,21 @@ FILE *stdin   = &_stdin;
 FILE *stdout = &_stdout;
 FILE *stderr = &_stderr;
 
+int mkdir(const char *pathname, unsigned int mode)
+{
+    return (int)syscall2(SYS_MKDIR, (uint64_t)pathname, (uint64_t)mode);
+}
+
+int remove(const char *path)
+{
+    return (int)syscall1(SYS_REMOVE, (uint64_t)path);
+}
+
+int rename(const char *from, const char *to)
+{
+    return (int)syscall2(SYS_RENAME, (uint64_t)from, (uint64_t)to);
+}
+
 /* Write the entire write-buffer to the OS.  Returns 0 or EOF. */
 static int _flush(FILE *f)
 {
@@ -48,21 +63,6 @@ static int _fill(FILE *f)
     }
     f->rlen = n;
     return n;
-}
-
-int mkdir(const char *pathname, unsigned int mode)
-{
-    return (int)syscall2(SYS_MKDIR, (uint64_t)pathname, (uint64_t)mode);
-}
-
-int remove(const char *path)
-{
-    return (int)syscall1(SYS_REMOVE, (uint64_t)path);
-}
-
-int rename(const char *from, const char *to)
-{
-    return (int)syscall2(SYS_RENAME, (uint64_t)from, (uint64_t)to);
 }
  
 FILE *fopen(const char *path, const char *mode)
@@ -206,6 +206,13 @@ size_t fwrite(const void *buf, size_t size, size_t nmemb, FILE *f)
 {
     if (!f || !buf || size == 0 || nmemb == 0)
         return 0;
+ 
+    if (f == stdout || f == stderr)
+    {
+        /* for simplicity, write directly to OS without buffering */
+        size_t n = write(f->fd, buf, size * nmemb);
+        return (n > 0) ? (size_t)n / size : 0;
+    }
  
     size_t       total   = size * nmemb;
     size_t       written = 0;
@@ -811,9 +818,7 @@ int printf(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    char buf[4096];
-    int r = vsnprintf(buf, sizeof(buf), fmt, ap);
+    int r = vfprintf(stdout, fmt, ap);
     va_end(ap);
-    write(1, buf, r);
     return r;
 }

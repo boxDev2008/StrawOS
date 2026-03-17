@@ -2,7 +2,10 @@
 
 #include <stddef.h>
 #include <stdarg.h>
-#include <syscall.h>
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 
 #define BUFSIZ 512
 
@@ -57,12 +60,11 @@ int fputc(int c, FILE *f);
 #define putc(c, f) fputc(c, f)
 
 int ungetc(int c, FILE *f);
+int putchar(int c);
 
 int mkdir(const char *pathname, unsigned int mode);
 int remove(const char *path);
 int rename(const char *from, const char *to);
-
-int putchar(int c);
 
 char *fgets(char *s, int n, FILE *f);
 int fputs(const char *s, FILE *f);

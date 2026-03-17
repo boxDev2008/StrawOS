@@ -40,7 +40,7 @@
 #define SYS_DEVICE  50
 #define SYS_TIME    51
 
-#define STDIN_FD 0
+#define STDIN_FD  0
 #define STDOUT_FD 1
 #define STDERR_FD 2
 
@@ -50,7 +50,7 @@
 
 #define DEVICE_FRAMEBUFFER 0
 #define DEVICE_PS2KEYBOARD 1
-#define DEVICE_PS2MOUSE 2
+#define DEVICE_PS2MOUSE    2
 
 #define USER_MMAP_BASE  0x0000400000000000UL
 #define USER_MMAP_MAX   0x0000700000000000UL
@@ -133,9 +133,25 @@ int64_t k_readdir(int fd, uint64_t index, void *out)
     return (int64_t)vfs_readdir(fd, index, (VDirent *)out);
 }
 
-int64_t k_spawn(const char *path)
+/*
+ * k_spawn — userspace spawn syscall handler.
+ *
+ * arg0 (rdi) = path   : user pointer to the ELF path string
+ * arg1 (rsi) = argv   : user pointer to a NULL-terminated array of char*,
+ *                        or NULL if no arguments.
+ *
+ * Returns the new task's pid on success, -1 on failure.
+ *
+ * Note: the argv pointers are user-space virtual addresses.  They are valid
+ * in the *current* address space (the calling task's), so we can read them
+ * directly while still running in that context before task_exec switches
+ * address spaces.
+ */
+int64_t k_spawn(const char *path, const char **argv)
 {
-    return (int64_t)task_exec(path, NULL);
+    Task *t = task_exec(path, argv);
+    if (!t) return -1;
+    return (int64_t)t->pid;
 }
 
 int64_t k_kill(int pid)
@@ -176,17 +192,15 @@ int64_t k_mmap(size_t len, int prot)
 
     task_mem_init_if_needed(t);
 
-    /* Determine page flags. */
     uint64_t flags = PTE_PRESENT | PTE_USER;
     if (prot & MMAP_PROT_WRITE)
         flags |= PTE_WRITABLE;
     if (!(prot & (MMAP_PROT_READ | MMAP_PROT_WRITE)))
-        flags = 0; /* PROT_NONE — don't map present at all (guard page) */
+        flags = 0;
 
     uint64_t page_count = DIV_CEIL(len, PAGE_SIZE);
     uint64_t virt       = t->mmap_next;
 
-    /* Make sure we stay within the mmap arena. */
     if (virt + page_count * PAGE_SIZE > USER_MMAP_MAX) return -1;
 
     AddressSpace *as = (AddressSpace *)t->aspace;
@@ -196,7 +210,6 @@ int64_t k_mmap(size_t len, int prot)
             return -1;
     }
 
-    /* Advance the hint past this region (leave one guard page gap). */
     t->mmap_next = virt + (page_count + 1) * PAGE_SIZE;
 
     return (int64_t)virt;
@@ -205,8 +218,8 @@ int64_t k_mmap(size_t len, int prot)
 int64_t k_munmap(uint64_t addr, size_t len)
 {
     if (!addr || len == 0)               return -1;
-    if (addr & (PAGE_SIZE - 1))          return -1; /* must be page-aligned */
-    if (addr < USER_MMAP_BASE)           return -1; /* outside mmap arena */
+    if (addr & (PAGE_SIZE - 1))          return -1;
+    if (addr < USER_MMAP_BASE)           return -1;
     if (addr >= USER_MMAP_MAX)           return -1;
 
     Task *t = task_current();
@@ -244,16 +257,10 @@ int64_t k_device(int device_id, void *data)
         task_mem_init_if_needed(t);
 
         uint64_t user_va = t->mmap_next;
-        t->mmap_next     = user_va + (page_count + 1) * PAGE_SIZE; /* +1 guard page */
+        t->mmap_next     = user_va + (page_count + 1) * PAGE_SIZE;
 
         AddressSpace *as = (AddressSpace *)t->aspace;
 
-        /*
-         * PTE_SHARED marks these pages as borrowed (device memory).
-         * vmm_free_unmap and vmm_destroy_aspace will clear the PTEs
-         * but will NOT call pmm_free_page on them.
-         * PTE_NOCACHE ensures writes go straight to the hardware framebuffer.
-         */
         if (!vmm_map(as, user_va, fb_phys, page_count,
                      PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_SHARED))
             return -1;
@@ -317,7 +324,7 @@ void syscall_int80_handler(InterruptFrame *frame)
         case SYS_CLOSE:
             ret = k_close((int)arg0);
             break;
-        
+
         case SYS_SEEK:
             ret = k_seek((int)arg0, (int64_t)arg1, (int)arg2);
             break;
@@ -353,9 +360,11 @@ void syscall_int80_handler(InterruptFrame *frame)
         case SYS_READDIR:
             ret = k_readdir((int)arg0, (uint64_t)arg1, (void *)(uintptr_t)arg2);
             break;
-        
+
         case SYS_SPAWN:
-            ret = k_spawn((const char *)(uintptr_t)arg0);
+            // arg0 = path (char*), arg1 = argv (char**) — both user VAs
+            ret = k_spawn((const char *)(uintptr_t)arg0,
+                          (const char **)(uintptr_t)arg1);
             break;
 
         case SYS_KILL:
@@ -378,7 +387,7 @@ void syscall_int80_handler(InterruptFrame *frame)
         case SYS_MUNMAP:
             ret = k_munmap(arg0, (size_t)arg1);
             break;
-        
+
         case SYS_DEVICE:
             ret = k_device((int)arg0, (void*)arg1);
             break;

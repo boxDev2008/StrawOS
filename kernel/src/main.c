@@ -155,7 +155,7 @@ void kernel_main(void)
     __asm__ volatile("sti");
 
     task_list();
-    Task *shell = task_exec("/modules/bin/shell.elf", "shell.elf");
+    Task *shell = task_exec("/modules/bin/shell.elf", NULL);
     if (!shell)
     {
         kprintf("[kernel] Failed to load /modules/bin/shell.elf\r\n");

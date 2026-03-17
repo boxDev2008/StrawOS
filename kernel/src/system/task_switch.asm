@@ -46,17 +46,21 @@ task_switch_asm:
 
 ; ── Userspace trampoline ──────────────────────────────────────────────────────
 ; Called via 'ret' from task_switch_asm for newly created user tasks.
-; Kernel stack on entry:
-;   [rsp+0]  = entry_va    (user _start virtual address)
-;   [rsp+8]  = ustack_top  (top of user stack)
+;
+; Kernel stack on entry (pushed by task_create_user, low addr first):
+;   [rsp+0]  = &task_userspace_trampoline  ← ret lands here
+;   [rsp+8]  = entry_va    (user _start virtual address)
+;   [rsp+16] = user_rsp    (pre-built user stack pointer — points at argc)
+;
+; So after the 'ret' that lands us here, rsp points at entry_va.
 
 %define GDT_USER_CODE_RPL3  0x23   ; (0x20 | 3)
 %define GDT_USER_DATA_RPL3  0x1B   ; (0x18 | 3)
 
 global task_userspace_trampoline
 task_userspace_trampoline:
-    pop     rcx         ; entry_va
-    pop     rdx         ; ustack_top
+    pop     rcx         ; entry_va   (rsp now points at user_rsp)
+    pop     rdx         ; user_rsp   (pre-built stack with argc/argv on it)
 
     ; Set ring-3 data segments before iretq
     mov     ax, GDT_USER_DATA_RPL3
@@ -65,18 +69,22 @@ task_userspace_trampoline:
     mov     fs, ax
     mov     gs, ax
 
-    ; Build iretq frame: SS, RSP, RFLAGS, CS, RIP
+    ; Build iretq frame on the *kernel* stack: SS, RSP, RFLAGS, CS, RIP
+    ;
+    ; RSP here is still the kernel stack — we push the iretq frame onto it,
+    ; then iretq switches to ring 3 and sets RSP = rdx (the user stack).
     push    qword GDT_USER_DATA_RPL3   ; SS
-    push    rdx                         ; RSP (user stack top)
+    push    rdx                         ; RSP — user stack, pointing at argc
     pushfq
     pop     rax
     or      rax, 0x200          ; IF=1
     and     rax, ~0x3000        ; IOPL=0
     push    rax                         ; RFLAGS
     push    qword GDT_USER_CODE_RPL3   ; CS
-    push    rcx                         ; RIP
+    push    rcx                         ; RIP = entry_va (_start)
 
-    ; Zero GP registers for clean userspace entry
+    ; Zero all GP registers for a clean, deterministic userspace entry.
+    ; rcx/rdx are already consumed above; zero them too.
     xor     rax, rax
     xor     rbx, rbx
     xor     rcx, rcx

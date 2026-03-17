@@ -7,6 +7,7 @@
 #include "arch/x86_64/gdt.h"
 #include "common.h"
 #include "libk/memory.h"
+#include "libk/kprintf.h"
 #include <string.h>
 #include <stddef.h>
 
@@ -16,7 +17,6 @@ static Task      s_tasks[TASK_MAX];
 static Task     *s_current = NULL;
 
 extern void task_switch_asm(TaskContext *from, TaskContext *to);
-extern void kprintf(const char *fmt, ...);
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -44,6 +44,15 @@ static uint32_t alloc_pid(void)
     }
 }
 
+// Return pointer to the last path component ("foo/bar/baz.elf" → "baz.elf").
+static const char *path_basename(const char *path)
+{
+    const char *last = path;
+    for (const char *p = path; *p; p++)
+        if (*p == '/') last = p + 1;
+    return last;
+}
+
 static void task_common_init(Task *t, const char *name)
 {
     t->pid   = alloc_pid();
@@ -62,6 +71,10 @@ static void task_common_init(Task *t, const char *name)
     t->ctx.r14 = 0;
     t->ctx.r15 = 0;
     t->ctx.rflags = 0x202; // IF=1
+
+    // Default working directory; overridden by task_exec when inheriting.
+    t->cwd[0] = '/';
+    t->cwd[1] = '\0';
 
     // Append to the end of the circular list (just before s_current)
     // so that scheduling order matches creation order.
@@ -108,7 +121,7 @@ Task *task_create(const char *name, void (*entry)(void))
     *--sp = (uint64_t)entry;
     t->ctx.rsp = (uint64_t)sp;
 
-    kprintf("[task] created kernel task '%s' (pid %u)\r\n", t->name, t->pid);
+    //kprintf("[task] created kernel task '%s' (pid %u)\r\n", t->name, t->pid);
     return t;
 }
 
@@ -119,8 +132,15 @@ extern void task_userspace_trampoline(void);
 #define USER_STACK_VA_TOP   0x0000700000000000UL
 #define USER_STACK_VA_PAGES (TASK_USTACK_SIZE / PAGE_SIZE)
 
+// Maximum number of argv pointers we'll accept.
+#define ARGV_MAX 64
+
 // Create a ring-3 userspace task.
-Task *task_create_user(const char *name, uint64_t entry_va, void *aspace)
+// argv is an optional NULL-terminated array of strings (may be NULL).
+// The kernel serialises argc/argv onto the top of the user stack so that
+// _start can pop argc into rdi and take rsp as argv, matching the SysV ABI.
+Task *task_create_user(const char *name, uint64_t entry_va, void *aspace,
+                       const char **argv)
 {
     Task *t = slot_alloc();
     if (!t) return NULL;
@@ -151,17 +171,77 @@ Task *task_create_user(const char *name, uint64_t entry_va, void *aspace)
     // fxrstor into this task doesn't immediately fire a #XF.
     *((uint32_t *)(t->fpu_state.data + 24)) = 0x1F80;
 
-    // Build kernel stack so task_switch_asm's 'ret' lands in the trampoline.
-    // The trampoline pops entry_va and ustack_top off the stack, then iretq.
+    // ── Serialise argv onto the top of the user stack ─────────────────────
+    //
+    // We have physical access to the user stack pages via the HHDM.
+    //
+    // Layout we build (grows downward, RSP will point at argc on entry):
+    //
+    //   USER_STACK_VA_TOP  (one-past-end)
+    //   [ string data: argv[0]\0 argv[1]\0 ... ]   <- written first, high addr
+    //   (8-byte alignment padding if needed)
+    //   [ NULL                                  ]   <- argv sentinel
+    //   [ argv[argc-1] user-VA ptr              ]
+    //   ...
+    //   [ argv[0]      user-VA ptr              ]
+    //   [ argc                                  ]   <- RSP on entry to _start
+    //                                                  (16-byte aligned)
+    //
+    // Count argv strings.
+    int argc = 0;
+    if (argv) {
+        while (argv[argc] && argc < ARGV_MAX)
+            argc++;
+    }
+
+    // Map the top user stack page into kernel-virtual space so we can write it.
+    uint64_t top_page_va   = USER_STACK_VA_TOP - PAGE_SIZE;
+    uint64_t top_page_phys = vmm_virt_to_phys(as, top_page_va);
+    uint8_t *kva_page      = (uint8_t *)PHYS_TO_VIRT(top_page_phys);
+
+    // Step 1: write strings from the top downward, record their user-VAs.
+    uint8_t *str_cursor = kva_page + PAGE_SIZE;
+    uint64_t user_str_ptrs[ARGV_MAX];
+
+    for (int i = argc - 1; i >= 0; i--) {
+        size_t len = strlen(argv[i]) + 1;
+        str_cursor -= len;
+        memcpy(str_cursor, argv[i], len);
+        uint64_t offset = (uint64_t)(kva_page + PAGE_SIZE - str_cursor);
+        user_str_ptrs[i] = USER_STACK_VA_TOP - offset;
+    }
+
+    // Step 2: align down to 8 bytes before writing the pointer array.
+    str_cursor = (uint8_t *)((uintptr_t)str_cursor & ~(uintptr_t)7);
+
+    // Step 3: calculate where the pointer table starts so we can align
+    // the final RSP to 16 bytes BEFORE writing argc.
+    // Slots needed: argc pointers + 1 NULL sentinel + 1 argc = argc+2 slots.
+    uint8_t *table_base = str_cursor - (uint64_t)(argc + 2) * sizeof(uint64_t);
+    // 16-byte align downward so RSP (= table_base) satisfies the SysV ABI.
+    table_base = (uint8_t *)((uintptr_t)table_base & ~(uintptr_t)0xF);
+
+    // Step 4: write argc, argv[], NULL into the aligned region.
+    uint64_t *slot = (uint64_t *)table_base;
+    slot[0] = (uint64_t)argc;
+    for (int i = 0; i < argc; i++)
+        slot[i + 1] = user_str_ptrs[i];
+    slot[argc + 1] = 0; // NULL sentinel
+
+    // Step 5: compute the user-VA of argc (this is the entry RSP).
+    uint64_t user_rsp = USER_STACK_VA_TOP
+                        - (uint64_t)(kva_page + PAGE_SIZE - table_base);
+
+    // ── Build kernel stack so task_switch_asm's 'ret' lands in trampoline ──
+    // Trampoline pops entry_va and user_rsp, then iretq.
     uint64_t *sp = (uint64_t *)(kstack + TASK_STACK_SIZE);
-    *--sp = USER_STACK_VA_TOP;          // arg2: ustack_top
-    *--sp = entry_va;                    // arg1: entry_va
+    *--sp = user_rsp;                           // arg2: user RSP (argc on stack)
+    *--sp = entry_va;                            // arg1: entry_va
     *--sp = (uint64_t)task_userspace_trampoline;
 
     t->ctx.rsp = (uint64_t)sp;
 
-    kprintf("[task] created user task '%s' (pid %u) entry=0x%p\r\n",
-            t->name, t->pid, (void *)entry_va);
+    //kprintf("[task] created user task '%s' (pid %u) entry=0x%p\r\n", t->name, t->pid, (void *)entry_va);
     return t;
 }
 
@@ -215,9 +295,6 @@ static Task *find_next_ready(Task *start)
     return NULL;
 }
 
-
-// Free a task that has already been switched away from.
-// Safe to call because we are no longer running on its stack.
 void task_yield(void)
 {
     Task *next = find_next_ready(s_current);
@@ -229,8 +306,6 @@ void task_yield(void)
 }
 
 // Called by SYS_EXIT. Marks current task DEAD and switches away. Never returns.
-// The kstack cannot be freed here (we're still on it), so it is left for
-// task_reap_dead() which the kernel task calls after returning from task_yield().
 void task_exit(void)
 {
     Task *dying = s_current;
@@ -262,9 +337,7 @@ void task_exit(void)
     for (;;) __asm__ volatile("hlt"); // never reached
 }
 
-// Free all DEAD tasks. Must only be called from the kernel task (never from
-// a task that might itself be dead). Unlinks each dead task from the ring,
-// frees its kernel stack, destroys its address space, and marks the slot UNUSED.
+// Free all DEAD tasks. Must only be called from the kernel task.
 void task_reap_dead(void)
 {
     for (int i = 0; i < TASK_MAX; i++) {
@@ -287,7 +360,7 @@ void task_reap_dead(void)
         if (t->aspace) { vmm_destroy_aspace((AddressSpace *)t->aspace); t->aspace = NULL; }
 
         t->state = TASK_UNUSED;
-        kprintf("[task] reaped '%s' (pid %u)\r\n", t->name, t->pid);
+        //kprintf("[task] reaped '%s' (pid %u)\r\n", t->name, t->pid);
     }
 }
 
@@ -302,36 +375,40 @@ void task_list(void)
     }
 }
 
-Task *task_exec(const char *path, const char *name)
+// Load and execute an ELF at `path`, deriving the task name from the filename.
+// argv is an optional NULL-terminated array of argument strings (may be NULL).
+// Returns the new task on success, NULL on failure.
+// The returned task's pid is safe to expose to userspace.
+Task *task_exec(const char *path, const char **argv)
 {
     /* ── 1. Open & stat ─────────────────────────────────────────────────── */
     int fd = vfs_open(path, O_RDONLY);
     if (fd < 0) {
-        kprintf("[loader] cannot open '%s' (err %d)\r\n", path, fd);
+        //kprintf("[loader] cannot open '%s' (err %d)\r\n", path, fd);
         return NULL;
     }
 
     VStat st;
     if (vfs_fstat(fd, &st) < 0 || st.st_size == 0) {
-        kprintf("[loader] stat failed or empty: '%s'\r\n", path);
+        //kprintf("[loader] stat failed or empty: '%s'\r\n", path);
         vfs_close(fd);
         return NULL;
     }
 
     uint64_t size = st.st_size;
-    kprintf("[loader] loading ELF '%s' (%u bytes)\r\n", path, (uint32_t)size);
+    //kprintf("[loader] loading ELF '%s' (%u bytes)\r\n", path, (uint32_t)size);
 
     /* ── 2. Read entire file into a kernel temp buffer ──────────────────── */
     uint8_t *buf = (uint8_t *)kmalloc(size);
     if (!buf) {
-        kprintf("[loader] kmalloc(%u) failed\r\n", (uint32_t)size);
+        //kprintf("[loader] kmalloc(%u) failed\r\n", (uint32_t)size);
         vfs_close(fd);
         return NULL;
     }
     ssize_t got = vfs_read(fd, buf, size);
     vfs_close(fd);
     if (got < 0 || (uint64_t)got != size) {
-        kprintf("[loader] vfs_read failed (got %d)\r\n", (int)got);
+        //kprintf("[loader] vfs_read failed (got %d)\r\n", (int)got);
         kfree(buf);
         return NULL;
     }
@@ -342,24 +419,23 @@ Task *task_exec(const char *path, const char *name)
         ehdr->e_ident[1] != 'E'  ||
         ehdr->e_ident[2] != 'L'  ||
         ehdr->e_ident[3] != 'F') {
-        kprintf("[loader] not an ELF file\r\n");
+        //kprintf("[loader] not an ELF file\r\n");
         kfree(buf);
         return NULL;
     }
     if (ehdr->e_machine != EM_X86_64) {
-        kprintf("[loader] not x86_64 ELF\r\n");
+        //kprintf("[loader] not x86_64 ELF\r\n");
         kfree(buf);
         return NULL;
     }
 
     uint64_t entry_va = ehdr->e_entry;
-    kprintf("[loader] ELF entry = 0x%p, %u phdrs\r\n",
-            (void *)entry_va, (uint32_t)ehdr->e_phnum);
+    //kprintf("[loader] ELF entry = 0x%p, %u phdrs\r\n", (void *)entry_va, (uint32_t)ehdr->e_phnum);
 
     /* ── 4. Create a fresh address space ────────────────────────────────── */
     AddressSpace *as = vmm_create_aspace();
     if (!as) {
-        kprintf("[loader] vmm_create_aspace failed\r\n");
+        //kprintf("[loader] vmm_create_aspace failed\r\n");
         kfree(buf);
         return NULL;
     }
@@ -374,9 +450,9 @@ Task *task_exec(const char *path, const char *name)
         uint64_t seg_filesz= ph->p_filesz;
         uint64_t file_off  = ph->p_offset;
 
-        kprintf("[loader]   PT_LOAD va=0x%p filesz=%u memsz=%u flags=%x\r\n",
-                (void *)seg_va, (uint32_t)seg_filesz, (uint32_t)seg_memsz,
-                (uint32_t)ph->p_flags);
+        //kprintf("[loader]   PT_LOAD va=0x%p filesz=%u memsz=%u flags=%x\r\n",
+                //(void *)seg_va, (uint32_t)seg_filesz, (uint32_t)seg_memsz,
+                //(uint32_t)ph->p_flags);
 
         uint64_t vmm_flags = PTE_PRESENT | PTE_USER;
         if (ph->p_flags & PF_W) vmm_flags |= PTE_WRITABLE;
@@ -389,7 +465,7 @@ Task *task_exec(const char *path, const char *name)
         for (uint64_t p = 0; p < page_cnt; p++) {
             uint64_t phys = pmm_alloc_page();
             if (!phys) {
-                kprintf("[loader] pmm_alloc_page failed\r\n");
+                //kprintf("[loader] pmm_alloc_page failed\r\n");
                 kfree(buf);
                 return NULL;
             }
@@ -416,7 +492,7 @@ Task *task_exec(const char *path, const char *name)
             }
 
             if (!vmm_map(as, page_va, phys, 1, vmm_flags)) {
-                kprintf("[loader] vmm_map failed\r\n");
+                //kprintf("[loader] vmm_map failed\r\n");
                 kfree(buf);
                 return NULL;
             }
@@ -425,11 +501,19 @@ Task *task_exec(const char *path, const char *name)
 
     kfree(buf);
 
-    /* ── 6. Create the userspace task ───────────────────────────────────── */
-    Task *t = task_create_user(name, entry_va, as);
+    /* ── 6. Derive task name from path and create the userspace task ─────── */
+    const char *name = path_basename(path);
+    Task *t = task_create_user(name, entry_va, as, argv);
     if (!t) {
-        kprintf("[loader] task_create_user failed\r\n");
+        //kprintf("[loader] task_create_user failed\r\n");
+        vmm_destroy_aspace(as);
         return NULL;
+    }
+
+    /* ── 7. Inherit the caller's working directory ───────────────────────── */
+    if (s_current && s_current->cwd[0] != '\0') {
+        strncpy(t->cwd, s_current->cwd, sizeof(t->cwd) - 1);
+        t->cwd[sizeof(t->cwd) - 1] = '\0';
     }
 
     return t;
@@ -439,7 +523,7 @@ int task_kill(uint32_t pid)
 {
     if (pid == 0)
     {
-        kprintf("[task] kill: refused — cannot kill kernel task\r\n");
+        //kprintf("[task] kill: refused — cannot kill kernel task\r\n");
         return -1;
     }
 
@@ -447,24 +531,23 @@ int task_kill(uint32_t pid)
 
     if (!target)
     {
-        kprintf("[task] kill: pid %u not found\r\n", pid);
+        //kprintf("[task] kill: pid %u not found\r\n", pid);
         return -1;
     }
 
     if (target->state == TASK_DEAD || target->state == TASK_UNUSED)
     {
-        kprintf("[task] kill: pid %u already dead\r\n", pid);
+        //kprintf("[task] kill: pid %u already dead\r\n", pid);
         return -1;
     }
 
     if (target == s_current)
     {
-        kprintf("[task] kill: pid %u is current, calling task_exit\r\n", pid);
+        //kprintf("[task] kill: pid %u is current, calling task_exit\r\n", pid);
         task_exit();
     }
 
-    kprintf("[task] kill: marking '%s' (pid %u) DEAD\r\n",
-            target->name, target->pid);
+    //kprintf("[task] kill: marking '%s' (pid %u) DEAD\r\n", target->name, target->pid);
     target->state = TASK_DEAD;
     return 0;
 }

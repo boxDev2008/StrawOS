@@ -60,7 +60,12 @@ typedef struct Task {
 
 void  task_init(void);
 Task *task_create(const char *name, void (*entry)(void));
-Task *task_create_user(const char *name, uint64_t entry_va, void *aspace);
+
+// argv is a NULL-terminated array of argument strings, or NULL for no args.
+// The kernel writes argc/argv onto the top of the user stack before entry.
+Task *task_create_user(const char *name, uint64_t entry_va, void *aspace,
+                       const char **argv);
+
 Task *task_current(void);
 Task *task_find(uint32_t pid);
 
@@ -74,5 +79,10 @@ void  task_exit(void);
 void  task_reap_dead(void);
 
 void  task_list(void);
-Task *task_exec(const char *path, const char *name);
-int task_kill(uint32_t pid);
+
+// Load an ELF from path, derive name from filename, pass argv to the new task.
+// argv may be NULL. Returns the new Task* on success, NULL on failure.
+// t->pid is safe to return to userspace.
+Task *task_exec(const char *path, const char **argv);
+
+int   task_kill(uint32_t pid);

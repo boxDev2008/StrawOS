@@ -13,10 +13,6 @@
 #define O_APPEND    0x400
 #define O_DIRECTORY 0x10000
 
-#define SEEK_SET 0
-#define SEEK_CUR 1
-#define SEEK_END 2
-
 int open(const char *path, int flags);
 int close(int fd);
 int write(int fd, const void *buf, size_t count);
@@ -27,7 +23,7 @@ int fstat(int fd, struct stat *statbuf);
 
 int    chdir(const char *path);
 char  *getcwd(char *buf, size_t size);
-int    spawn(const char *path);
+int    spawn(const char *path, const char **argv);
 int    kill(int pid);
 int    getpid(void);
 void   yield(void);
