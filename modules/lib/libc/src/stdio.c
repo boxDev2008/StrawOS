@@ -393,7 +393,7 @@ void clearerr(FILE *f){ if (f) { f->eof = 0; f->error = 0; } }
 /* ------------------------------------------------------------------ */
 int vfprintf(FILE *f, const char *fmt, va_list ap)
 {
-    char buf[1024];
+    char buf[4096];
     int  n = vsnprintf(buf, sizeof(buf), fmt, ap);
     if (n <= 0) return n;
     /* clamp to buffer */
