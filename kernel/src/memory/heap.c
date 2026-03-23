@@ -1,7 +1,7 @@
 #include "heap.h"
 #include "vmm.h"
 #include "pmm.h"
-#include <memory.h>
+#include <string.h>
 
 #define LARGE_MAGIC  0xDEADBEEFCAFEBABEUL
 

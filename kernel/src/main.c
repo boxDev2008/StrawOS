@@ -2,7 +2,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
-#include <memory.h>
 #include <math.h>
 
 #include "arch/x86_64/gdt.h"
@@ -24,21 +23,20 @@
 #include "devices/ps2keyboard.h"
 #include "devices/ps2mouse.h"
 
+#include "net/net.h"
+#include "net/socket.h"
+
 __attribute__((used, section(".requests")))
 static volatile struct limine_memmap_request memmap_req = {
-    .id = LIMINE_MEMMAP_REQUEST_ID, .revision = 0
+    .id = LIMINE_MEMMAP_REQUEST_ID,
+    .revision = 0
 };
 
 __attribute__((used, section(".requests")))
 static volatile struct limine_hhdm_request hhdm_req = {
-    .id = LIMINE_HHDM_REQUEST_ID, .revision = 0
+    .id = LIMINE_HHDM_REQUEST_ID,
+    .revision = 0
 };
-
-__attribute__((used, section(".requests")))
-static volatile struct limine_executable_address_request exe_addr_req = {
-    .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST_ID, .revision = 0
-};
-
 
 __attribute__((used, section(".requests")))
 static volatile struct limine_module_request module_request = {
@@ -48,7 +46,8 @@ static volatile struct limine_module_request module_request = {
 
 __attribute__((used, section(".requests")))
 volatile struct limine_framebuffer_request framebuffer_req = {
-    .id = LIMINE_FRAMEBUFFER_REQUEST_ID, .revision = 0
+    .id = LIMINE_FRAMEBUFFER_REQUEST_ID,
+    .revision = 0
 };
 
 uint64_t g_hhdm_offset;
@@ -145,14 +144,53 @@ void kernel_main(void)
 
         kprintf("Loaded module: %s %u\r\n", path, (uint32_t)size);
     }
-
+    
     task_init();
-
-    pit_init(1000);
     ps2keyboard_init();
     ps2mouse_init(framebuffer->width, framebuffer->height);
-
+    
+    pit_init();
+    
     __asm__ volatile("sti");
+
+    /* Network — QEMU user-mode networking defaults */
+    net_init(
+        (10u<<24)|(0u<<16)|(2u<<8)|15u,    /* 10.0.2.15        */
+        (255u<<24)|(255u<<16)|(255u<<8)|0u, /* 255.255.255.0    */
+        (10u<<24)|(0u<<16)|(2u<<8)|2u       /* 10.0.2.2 gateway */
+    );
+
+    /* ---- loopback self-send test ---- */
+    int sender   = k_socket(SOCK_UDP);
+    int receiver = k_socket(SOCK_UDP);
+
+    k_bind(receiver, 7777);
+    k_connect(sender, (10u<<24)|(0u<<16)|(2u<<8)|15u, 7777);
+
+    k_netsend(sender, "ping", 4);
+
+    char buf[32] = {0};
+    int n = (int)k_netrecv(receiver, buf, sizeof(buf) - 1);
+    if (n > 0)
+        kprintf("[loopback test] received %d bytes: '%s'\n", n, buf);
+    else
+        kprintf("[loopback test] received 0 bytes\n");
+
+    k_sockclose(sender);
+    k_sockclose(receiver);
+
+    /* ---- ICMP ping 8.8.8.8 ---- */
+    uint32_t ping_ip = (8u<<24)|(8u<<16)|(8u<<8)|8u;
+    kprintf("[ping] pinging 8.8.8.8...\n");
+    for (uint16_t seq = 1; seq <= 4; seq++) {
+        IcmpReply reply;
+        if (icmp_ping(ping_ip, seq, 2000, &reply)) {
+            kprintf("[ping] reply from 8.8.8.8: seq=%u time=%ums\n",
+                    seq, reply.rtt_ticks);
+        } else {
+            kprintf("[ping] seq=%u timed out\n", seq);
+        }
+    }
 
     task_list();
     Task *shell = task_exec("/modules/bin/shell.elf", NULL);
@@ -162,8 +200,5 @@ void kernel_main(void)
     }
 
     while (1)
-    {
-        task_reap_dead();
-        task_yield();
-    }
+        __asm__ volatile("hlt");
 }

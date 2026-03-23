@@ -1,5 +1,5 @@
 #include "gdt.h"
-#include <memory.h>
+#include <string.h>
 
 /* ── GDT table ────────────────────────────────────────────────── */
 /* 7 entries: null, kcode, kdata, udata, ucode, tss_low, tss_high */

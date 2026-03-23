@@ -6,7 +6,6 @@
 #include "memory/pmm.h"
 #include "arch/x86_64/gdt.h"
 #include "common.h"
-#include "libk/memory.h"
 #include "libk/kprintf.h"
 #include <string.h>
 #include <stddef.h>
@@ -276,8 +275,21 @@ static void do_switch(Task *from, Task *to)
     else
         __asm__ volatile("fninit");
 
+    // Strip IF from the context we're about to restore.
+    // task_switch_asm's popfq would otherwise re-enable interrupts while
+    // we're still inside the IRQ handler's stack frame (IF=0 since interrupt
+    // gate entry). The CPU-pushed RFLAGS on the stack already holds IF=1
+    // for the interrupted task; iretq will restore it correctly.
+    uint64_t saved_to_rflags = to->ctx.rflags;
+    to->ctx.rflags &= ~(uint64_t)0x200;   // clear IF
+
     task_switch_asm(&from->ctx, &to->ctx);
-    // Returns here when switched back to `from`.
+
+    // Execution resumes here when `from` is switched back to.
+    // Restore the rflags we modified (to->ctx has since been re-saved
+    // by whatever switch brought it back, so this just keeps the
+    // canonical value consistent for future cooperative yields).
+    to->ctx.rflags = saved_to_rflags;
 }
 
 // Find the next READY task after `start` in the ring (skipping `start` itself).

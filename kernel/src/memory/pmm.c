@@ -1,6 +1,6 @@
 #include "pmm.h"
 #include <stddef.h>
-#include <memory.h>
+#include <string.h>
 
 typedef struct FreeBlock
 {

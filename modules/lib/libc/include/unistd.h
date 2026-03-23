@@ -30,4 +30,4 @@ char  *getcwd(char *buf, size_t size);
 int    spawn(const char *path, const char **argv);
 int    kill(int pid);
 int    getpid(void);
-void   yield(void);
+int    waitpid(uint32_t pid);

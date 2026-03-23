@@ -1,7 +1,6 @@
 #include "vfs.h"
 
 #include <string.h>
-#include <memory.h>
 
 #include "memory/heap.h"
 #include "system/task.h"

@@ -149,11 +149,12 @@ void idt_init(void) {
 
     /* Install all 256 stubs.
      * Vectors 0-31: exception gates (DPL=0, interrupt gate 0x8E)
-     * Vector  0x80: syscall trap gate (DPL=3, 0xEE) — if using int 0x80
+     * Vector  0x80: syscall trap gate (DPL=3, 0xEF) — trap gate keeps IF set
+     *               so the PIT keeps ticking during blocking syscalls
      * Vectors 32-47: IRQ gates (DPL=0, 0x8E)
      */
     for (int i = 0; i < 256; i++) {
-        uint8_t attr = (i == 0x80) ? 0xEE : 0x8E;
+        uint8_t attr = (i == 0x80) ? 0xEF : 0x8E;  /* 0xEF = trap gate, 0x8E = interrupt gate */
         idt_set_entry(i, isr_stub_table[i], attr);
     }
 

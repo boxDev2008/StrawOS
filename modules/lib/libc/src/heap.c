@@ -1,5 +1,5 @@
 #include <stdlib.h>
-#include <memory.h>
+#include <string.h>
 
 #define ALIGN        16u
 #define HDR_SIZE     sizeof(BlockHdr)

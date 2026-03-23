@@ -11,7 +11,9 @@ limine:
 	make -C limine
 
 run:
-	qemu-system-x86_64 -display sdl -m 512M -cdrom strawos-x86_64.iso
+	qemu-system-x86_64 -display sdl -m 512M -cdrom strawos-x86_64.iso \
+	-device rtl8139,netdev=net0 \
+	-netdev user,id=net0,hostfwd=udp::5000-10.0.2.15:5000
 
 iso: limine libc kernel modules
 	mkdir -p iso_root/boot/limine iso_root/EFI/BOOT

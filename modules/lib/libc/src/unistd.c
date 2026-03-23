@@ -63,7 +63,7 @@ int getpid(void)
     return (int)syscall0(SYS_GETPID);
 }
 
-void yield(void)
+int waitpid(uint32_t pid)
 {
-    syscall0(SYS_YIELD);
+    return (int)syscall1(SYS_WAITPID, (uint64_t)pid);
 }

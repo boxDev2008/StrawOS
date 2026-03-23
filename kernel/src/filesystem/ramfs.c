@@ -2,7 +2,6 @@
 #include "memory/heap.h"
 
 #include <string.h>
-#include <memory.h>
 
 typedef struct RamDirEntry
 {

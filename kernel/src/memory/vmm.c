@@ -15,7 +15,7 @@
 
 #include "vmm.h"
 #include "pmm.h"
-#include <memory.h>
+#include <string.h>
 
 /* ── page-table index extraction ────────────────────────────────────────── */
 

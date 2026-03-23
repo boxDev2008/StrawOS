@@ -21,13 +21,20 @@
 #define SYS_SPAWN   18
 #define SYS_KILL    19
 #define SYS_GETPID  20
-#define SYS_YIELD   30
+#define SYS_WAITPID 21
 
 #define SYS_MMAP    41
 #define SYS_MUNMAP  42
 
 #define SYS_DEVICE  50
 #define SYS_TIME    51
+
+#define SYS_SOCKET    60
+#define SYS_BIND      61
+#define SYS_CONNECT   62
+#define SYS_SEND      63
+#define SYS_RECV      64
+#define SYS_SOCKCLOSE 65
 
 uint64_t syscall0(uint64_t nr);
 uint64_t syscall1(uint64_t nr, uint64_t a0);

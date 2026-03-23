@@ -3,7 +3,6 @@
 #include "common.h"
 #include "memory/vmm.h"
 #include "memory/pmm.h"
-#include "libk/memory.h"
 #include "filesystem/vfs.h"
 #include "arch/x86_64/idt.h"
 
@@ -11,8 +10,15 @@
 #include "devices/ps2keyboard.h"
 #include "devices/ps2mouse.h"
 
+#include "net/socket.h"
+
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
+
+/* -----------------------------------------------------------------------
+ * Syscall numbers — filesystem / process / memory / device
+ * ----------------------------------------------------------------------- */
 
 #define SYS_EXIT    1
 #define SYS_READ    3
@@ -32,13 +38,20 @@
 #define SYS_SPAWN   18
 #define SYS_KILL    19
 #define SYS_GETPID  20
-#define SYS_YIELD   30
+#define SYS_WAITPID 21
 
 #define SYS_MMAP    41
 #define SYS_MUNMAP  42
 
 #define SYS_DEVICE  50
 #define SYS_TIME    51
+
+#define SYS_SOCKET    60
+#define SYS_BIND      61
+#define SYS_CONNECT   62
+#define SYS_SEND      63
+#define SYS_RECV      64
+#define SYS_SOCKCLOSE 65
 
 #define STDIN_FD  0
 #define STDOUT_FD 1
@@ -133,20 +146,10 @@ int64_t k_readdir(int fd, uint64_t index, void *out)
     return (int64_t)vfs_readdir(fd, index, (VDirent *)out);
 }
 
-/*
- * k_spawn — userspace spawn syscall handler.
- *
- * arg0 (rdi) = path   : user pointer to the ELF path string
- * arg1 (rsi) = argv   : user pointer to a NULL-terminated array of char*,
- *                        or NULL if no arguments.
- *
- * Returns the new task's pid on success, -1 on failure.
- *
- * Note: the argv pointers are user-space virtual addresses.  They are valid
- * in the *current* address space (the calling task's), so we can read them
- * directly while still running in that context before task_exec switches
- * address spaces.
- */
+/* -----------------------------------------------------------------------
+ * Process syscall handlers
+ * ----------------------------------------------------------------------- */
+
 int64_t k_spawn(const char *path, const char **argv)
 {
     Task *t = task_exec(path, argv);
@@ -165,13 +168,22 @@ int64_t k_getpid(void)
     return t ? (int64_t)t->pid : 0;
 }
 
+int64_t k_waitpid(uint32_t pid)
+{
+    Task *t = task_find(pid);
+    return t->state != TASK_DEAD ? -1 : 0;
+}
+
 int64_t k_exit(int code)
 {
     (void)code;
-    task_exit();   // marks current task dead and switches away — never returns
+    task_exit();
     __builtin_unreachable();
 }
 
+/* -----------------------------------------------------------------------
+ * Memory syscall handlers
+ * ----------------------------------------------------------------------- */
 
 static void task_mem_init_if_needed(Task *t)
 {
@@ -232,6 +244,10 @@ int64_t k_munmap(uint64_t addr, size_t len)
     return 0;
 }
 
+/* -----------------------------------------------------------------------
+ * Device syscall handler
+ * ----------------------------------------------------------------------- */
+
 int64_t k_device(int device_id, void *data)
 {
     Task *t = task_current();
@@ -275,14 +291,10 @@ int64_t k_device(int device_id, void *data)
         return 0;
     }
     case DEVICE_PS2KEYBOARD:
-    {
         return ps2keyboard_poll_scancode((uint8_t*)data);
-    }
     case DEVICE_PS2MOUSE:
-    {
         memcpy(data, ps2mouse_get_state(), sizeof(MouseState));
         return 0;
-    }
     default:
         return -1;
     }
@@ -290,116 +302,151 @@ int64_t k_device(int device_id, void *data)
 
 int64_t k_time(void)
 {
-    return (int64_t)pit_get_ticks();
+    return (int64_t)pit_get_ticks_ms();
 }
+
+extern volatile bool schedule_frozen;
 
 void syscall_int80_handler(InterruptFrame *frame)
 {
+    schedule_frozen = true;
+
     uint64_t nr   = frame->rax;
     uint64_t arg0 = frame->rdi;
     uint64_t arg1 = frame->rsi;
     uint64_t arg2 = frame->rdx;
     uint64_t arg3 = frame->r10;
-    uint64_t arg4 = frame->r8;
+    /* uint64_t arg4 = frame->r8; */   /* unused for now */
 
     int64_t ret;
 
     switch (nr) {
-        case SYS_EXIT:
-            k_exit((int)arg0);
-            __builtin_unreachable();
 
-        case SYS_READ:
-            ret = k_read((int)arg0, (char *)(uintptr_t)arg1, (size_t)arg2);
-            break;
+    /* ---- exit ---- */
+    case SYS_EXIT:
+        k_exit((int)arg0);
+        __builtin_unreachable();
 
-        case SYS_WRITE:
-            ret = k_write((int)arg0, (const char *)(uintptr_t)arg1, (size_t)arg2);
-            break;
+    /* ---- filesystem ---- */
+    case SYS_READ:
+        ret = k_read((int)arg0, (char *)(uintptr_t)arg1, (size_t)arg2);
+        break;
 
-        case SYS_OPEN:
-            ret = k_open((const char *)(uintptr_t)arg0, (int)arg1);
-            break;
+    case SYS_WRITE:
+        ret = k_write((int)arg0, (const char *)(uintptr_t)arg1, (size_t)arg2);
+        break;
 
-        case SYS_CLOSE:
-            ret = k_close((int)arg0);
-            break;
+    case SYS_OPEN:
+        ret = k_open((const char *)(uintptr_t)arg0, (int)arg1);
+        break;
 
-        case SYS_SEEK:
-            ret = k_seek((int)arg0, (int64_t)arg1, (int)arg2);
-            break;
+    case SYS_CLOSE:
+        ret = k_close((int)arg0);
+        break;
 
-        case SYS_STAT:
-            ret = k_stat((const char *)(uintptr_t)arg0, (void *)arg1);
-            break;
+    case SYS_SEEK:
+        ret = k_seek((int)arg0, (int64_t)arg1, (int)arg2);
+        break;
 
-        case SYS_FSTAT:
-            ret = k_fstat((int)arg0, (void *)arg1);
-            break;
+    case SYS_STAT:
+        ret = k_stat((const char *)(uintptr_t)arg0, (void *)arg1);
+        break;
 
-        case SYS_MKDIR:
-            ret = k_mkdir((const char *)(uintptr_t)arg0);
-            break;
+    case SYS_FSTAT:
+        ret = k_fstat((int)arg0, (void *)arg1);
+        break;
 
-        case SYS_REMOVE:
-            ret = k_remove((const char *)(uintptr_t)arg0);
-            break;
+    case SYS_MKDIR:
+        ret = k_mkdir((const char *)(uintptr_t)arg0);
+        break;
 
-        case SYS_RENAME:
-            ret = k_rename((const char *)(uintptr_t)arg0, (const char *)(uintptr_t)arg1);
-            break;
+    case SYS_REMOVE:
+        ret = k_remove((const char *)(uintptr_t)arg0);
+        break;
 
-        case SYS_CHDIR:
-            ret = k_chdir((const char *)(uintptr_t)arg0);
-            break;
+    case SYS_RENAME:
+        ret = k_rename((const char *)(uintptr_t)arg0,
+                       (const char *)(uintptr_t)arg1);
+        break;
 
-        case SYS_GETCWD:
-            ret = k_getcwd((char *)(uintptr_t)arg0, (size_t)arg1);
-            break;
+    case SYS_CHDIR:
+        ret = k_chdir((const char *)(uintptr_t)arg0);
+        break;
 
-        case SYS_READDIR:
-            ret = k_readdir((int)arg0, (uint64_t)arg1, (void *)(uintptr_t)arg2);
-            break;
+    case SYS_GETCWD:
+        ret = k_getcwd((char *)(uintptr_t)arg0, (size_t)arg1);
+        break;
 
-        case SYS_SPAWN:
-            // arg0 = path (char*), arg1 = argv (char**) — both user VAs
-            ret = k_spawn((const char *)(uintptr_t)arg0,
-                          (const char **)(uintptr_t)arg1);
-            break;
+    case SYS_READDIR:
+        ret = k_readdir((int)arg0, (uint64_t)arg1, (void *)(uintptr_t)arg2);
+        break;
 
-        case SYS_KILL:
-            ret = k_kill((int)arg0);
-            break;
+    /* ---- process ---- */
+    case SYS_SPAWN:
+        ret = k_spawn((const char *)(uintptr_t)arg0,
+                      (const char **)(uintptr_t)arg1);
+        break;
 
-        case SYS_GETPID:
-            ret = k_getpid();
-            break;
+    case SYS_KILL:
+        ret = k_kill((int)arg0);
+        break;
 
-        case SYS_YIELD:
-            task_yield();
-            ret = 0;
-            break;
+    case SYS_GETPID:
+        ret = k_getpid();
+        break;
 
-        case SYS_MMAP:
-            ret = k_mmap((size_t)arg0, (int)arg1);
-            break;
+    case SYS_WAITPID:
+        ret = k_waitpid((uint32_t)arg0);
+        break;
 
-        case SYS_MUNMAP:
-            ret = k_munmap(arg0, (size_t)arg1);
-            break;
+    /* ---- memory ---- */
+    case SYS_MMAP:
+        ret = k_mmap((size_t)arg0, (int)arg1);
+        break;
 
-        case SYS_DEVICE:
-            ret = k_device((int)arg0, (void*)arg1);
-            break;
+    case SYS_MUNMAP:
+        ret = k_munmap(arg0, (size_t)arg1);
+        break;
 
-        case SYS_TIME:
-            ret = k_time();
-            break;
+    /* ---- device / time ---- */
+    case SYS_DEVICE:
+        ret = k_device((int)arg0, (void *)arg1);
+        break;
 
-        default:
-            ret = -1;
-            break;
+    case SYS_TIME:
+        ret = k_time();
+        break;
+
+    /* ---- socket / network ---- */
+    case SYS_SOCKET:
+        ret = k_socket((int)arg0);
+        break;
+
+    case SYS_BIND:
+        ret = k_bind((int)arg0, (uint16_t)arg1);
+        break;
+
+    case SYS_CONNECT:
+        ret = k_connect((int)arg0, (uint32_t)arg1, (uint16_t)arg2);
+        break;
+
+    case SYS_SEND:
+        ret = k_netsend((int)arg0, (const void *)(uintptr_t)arg1, (uint32_t)arg2);
+        break;
+
+    case SYS_RECV:
+        ret = k_netrecv((int)arg0, (void *)(uintptr_t)arg1, (uint32_t)arg2);
+        break;
+
+    case SYS_SOCKCLOSE:
+        ret = k_sockclose((int)arg0);
+        break;
+
+    default:
+        ret = -1;
+        break;
     }
 
     frame->rax = (uint64_t)ret;
+    schedule_frozen = false;
 }

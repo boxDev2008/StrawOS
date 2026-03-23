@@ -224,8 +224,7 @@ static int try_spawn_util(const char *cmd, int argc, char *argv[])
         return 1; /* found but failed — don't fall through */
     }
 
-    /* Cooperative wait: yield until the child exits. */
-    for (int i = 0; i < 512; i++) yield();
+    while (waitpid((uint32_t)pid) != 0);
     return 1;
 }
 
@@ -245,7 +244,7 @@ static void spawn_elf(const char *abs_path, int argc, char *argv[])
         shell_errf("cannot execute '%s'", argv[0]);
         return;
     }
-    for (int i = 0; i < 512; i++) yield();
+    while (waitpid((uint32_t)pid) != 0) ;
 }
 
 /* ── Lua integration ───────────────────────────────────────────────────── */
@@ -765,7 +764,7 @@ static int kb_poll_char(void)
 static int kb_getchar(void)
 {
     int c;
-    while ((c = kb_poll_char()) == 0) yield();
+    while ((c = kb_poll_char()) == 0) ;
     return c;
 }
 
