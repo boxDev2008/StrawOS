@@ -1,6 +1,5 @@
 #include "net/socket.h"
 #include "net/net.h"
-#include "memory/heap.h"
 #include "libk/kprintf.h"
 
 #include <stdint.h>
@@ -8,25 +7,12 @@
 #include <string.h>
 
 /* -----------------------------------------------------------------------
- * Socket table — heap-allocated at socket_init()
+ * Socket table — static array, 1024 * 16 bytes = 16 KB of BSS
  * ----------------------------------------------------------------------- */
 
-static Socket *sock_table = NULL;
+static Socket sock_table[MAX_SOCKETS];
 
 static uint16_t next_ephemeral = SOCK_EPHEMERAL_BASE;
-
-void socket_init(void)
-{
-    sock_table = kmalloc(sizeof(Socket) * MAX_SOCKETS);
-    if (!sock_table) {
-        kprintf("[socket] failed to allocate socket table\n");
-        return;
-    }
-    memset(sock_table, 0, sizeof(Socket) * MAX_SOCKETS);
-    kprintf("[socket] table ready  max=%d  (%u KB)\n",
-            MAX_SOCKETS,
-            (unsigned)(sizeof(Socket) * MAX_SOCKETS / 1024));
-}
 
 static uint16_t alloc_ephemeral_port(void)
 {
@@ -43,7 +29,6 @@ static uint16_t alloc_ephemeral_port(void)
 int64_t k_socket(int type)
 {
     (void)type;  /* only UDP for now */
-    if (!sock_table) return -1;
 
     for (int i = 0; i < MAX_SOCKETS; i++) {
         if (!sock_table[i].used) {

@@ -20,7 +20,7 @@
  * is_sock_fd / sock_fd_to_slot translate back and forth.
  * ----------------------------------------------------------------------- */
 
-#define MAX_SOCKETS     (1<<14)
+#define MAX_SOCKETS     1024
 #define SOCK_EPHEMERAL_BASE 49152   /* start of dynamic/private port range */
 
 typedef struct {
@@ -42,12 +42,6 @@ static inline int  slot_to_sock_fd(int slot) { return -(slot + 2); }
 /* -----------------------------------------------------------------------
  * Kernel socket syscall handlers (called from syscall.c)
  * ----------------------------------------------------------------------- */
-
-/*
- * Initialise the socket table (heap-allocates MAX_SOCKETS slots).
- * Must be called once after heap_init(), before any k_socket() calls.
- */
-void socket_init(void);
 
 /*
  * Allocate a new UDP socket.

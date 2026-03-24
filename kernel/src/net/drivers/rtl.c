@@ -12,7 +12,7 @@
  *   4. TX / RX     – per-family implementations behind common wrappers
  */
 
-#include "net/drivers/rtl8139.h"
+#include "rtl.h"
 #include "common.h"
 #include "arch/x86_64/io.h"
 #include "memory/pmm.h"
