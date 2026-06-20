@@ -3,7 +3,6 @@
 
 #include "flanterm/flanterm.h"
 
-#include <stddef.h>
 #include <stdarg.h>
 
 extern struct flanterm_context *ft_ctx;
