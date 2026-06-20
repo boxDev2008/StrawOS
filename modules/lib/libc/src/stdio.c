@@ -28,7 +28,6 @@ int rename(const char *from, const char *to)
     return (int)syscall2(SYS_RENAME, (uint64_t)from, (uint64_t)to);
 }
 
-/* Write the entire write-buffer to the OS.  Returns 0 or EOF. */
 static int _flush(FILE *f)
 {
     if (!f || f->wlen == 0)
@@ -47,7 +46,6 @@ static int _flush(FILE *f)
     return 0;
 }
  
-/* Fill the read buffer.  Returns number of bytes now available, or 0. */
 static int _fill(FILE *f)
 {
     f->rpos = 0;
@@ -105,7 +103,7 @@ int fclose(FILE *f)
     if (close(f->fd) != 0)
         rc = EOF;
 
-    free(f);   /* was: invalidate-in-place, now actually free */
+    free(f);
     return rc;
 }
 
@@ -114,12 +112,10 @@ FILE *freopen(const char *path, const char *mode, FILE *f)
     if (!f || !mode)
         return NULL;
  
-    /* flush and close the current fd */
     _flush(f);
     if (f->fd >= 0)
         close(f->fd);
  
-    /* reset all state */
     f->fd    = -1;
     f->error =  0;
     f->eof   =  0;
@@ -127,13 +123,12 @@ FILE *freopen(const char *path, const char *mode, FILE *f)
     f->rlen  =  0;
     f->wlen  =  0;
  
-    if (path == NULL) {
-        /* NULL path: not meaningful without fcntl/dup2; signal error */
+    if (path == NULL)
+    {
         f->error = 1;
         return NULL;
     }
  
-    /* parse mode into flags (same logic as fopen) */
     int flags = 0;
     int plus  = 0;
     for (const char *m = mode; *m; m++)
@@ -158,19 +153,13 @@ FILE *freopen(const char *path, const char *mode, FILE *f)
     return f;
 }
 
-/* ------------------------------------------------------------------ */
-/*  fflush                                                             */
-/* ------------------------------------------------------------------ */
 int fflush(FILE *f)
 {
     if (!f)
-        return 0;   /* fflush(NULL) – no-op in this implementation */
+        return 0;
     return _flush(f);
 }
- 
-/* ------------------------------------------------------------------ */
-/*  fread                                                              */
-/* ------------------------------------------------------------------ */
+
 size_t fread(void *buf, size_t size, size_t nmemb, FILE *f)
 {
     if (!f || !buf || size == 0 || nmemb == 0)
@@ -180,15 +169,14 @@ size_t fread(void *buf, size_t size, size_t nmemb, FILE *f)
     size_t copied = 0;
     char  *dst    = (char *)buf;
  
-    while (copied < total) {
-        /* consume from read buffer first */
+    while (copied < total)
+    {
         while (f->rpos < f->rlen && copied < total)
             dst[copied++] = f->rbuf[f->rpos++];
  
         if (copied == total)
             break;
  
-        /* need more data */
         if (f->eof || f->error)
             break;
  
@@ -199,9 +187,6 @@ size_t fread(void *buf, size_t size, size_t nmemb, FILE *f)
     return (size > 0) ? (copied / size) : 0;
 }
  
-/* ------------------------------------------------------------------ */
-/*  fwrite                                                             */
-/* ------------------------------------------------------------------ */
 size_t fwrite(const void *buf, size_t size, size_t nmemb, FILE *f)
 {
     if (!f || !buf || size == 0 || nmemb == 0)
@@ -209,21 +194,21 @@ size_t fwrite(const void *buf, size_t size, size_t nmemb, FILE *f)
  
     if (f == stdout || f == stderr)
     {
-        /* for simplicity, write directly to OS without buffering */
         size_t n = write(f->fd, buf, size * nmemb);
         return (n > 0) ? (size_t)n / size : 0;
     }
  
-    size_t       total   = size * nmemb;
-    size_t       written = 0;
-    const char  *src     = (const char *)buf;
+    size_t total = size * nmemb;
+    size_t written = 0;
+    const char  *src = (const char *)buf;
  
-    while (written < total) {
-        /* fill write buffer */
+    while (written < total)
+    {
         while (f->wlen < FILE_BUF_SIZE && written < total)
             f->wbuf[f->wlen++] = src[written++];
  
-        if (f->wlen == FILE_BUF_SIZE) {
+        if (f->wlen == FILE_BUF_SIZE)
+        {
             if (_flush(f) == EOF)
                 break;
         }
@@ -231,25 +216,21 @@ size_t fwrite(const void *buf, size_t size, size_t nmemb, FILE *f)
  
     return (size > 0) ? (written / size) : 0;
 }
- 
-/* ------------------------------------------------------------------ */
-/*  fgetc                                                              */
-/* ------------------------------------------------------------------ */
+
 int fgetc(FILE *f)
 {
     if (!f || f->error || f->eof)
         return EOF;
  
-    if (f->rpos >= f->rlen) {
+    if (f->rpos >= f->rlen)
+    {
         if (_fill(f) == 0)
             return EOF;
     }
+
     return (unsigned char)f->rbuf[f->rpos++];
 }
- 
-/* ------------------------------------------------------------------ */
-/*  fputc                                                              */
-/* ------------------------------------------------------------------ */
+
 int fputc(int c, FILE *f)
 {
     if (!f || f->error)
@@ -257,10 +238,12 @@ int fputc(int c, FILE *f)
  
     f->wbuf[f->wlen++] = (char)(unsigned char)c;
  
-    if (f->wlen == FILE_BUF_SIZE || (unsigned char)c == '\n') {
+    if (f->wlen == FILE_BUF_SIZE || (unsigned char)c == '\n')
+    {
         if (_flush(f) == EOF)
             return EOF;
     }
+
     return (unsigned char)c;
 }
 
@@ -269,28 +252,26 @@ int ungetc(int c, FILE *f)
     if (!f || c == EOF)
         return EOF;
  
-    if (f->rpos > 0) {
-        /* there is room to step back in the existing buffer */
+    if (f->rpos > 0)
+    {
         f->rbuf[--f->rpos] = (char)(unsigned char)c;
-    } else if (f->rlen < FILE_BUF_SIZE) {
-        /* buffer has space: shift existing data right by one to make
-           room at index 0 for the pushed-back byte                    */
+    }
+    else if (f->rlen < FILE_BUF_SIZE)
+    {
         for (int i = f->rlen; i > 0; i--)
             f->rbuf[i] = f->rbuf[i - 1];
         f->rbuf[0] = (char)(unsigned char)c;
         f->rlen++;
-    } else {
-        /* buffer is completely full with unconsumed data – can't fit   */
+    }
+    else
+    {
         return EOF;
     }
  
-    f->eof = 0;   /* ungetc always clears EOF per the C standard */
+    f->eof = 0;
     return (unsigned char)c;
 }
 
-/* ------------------------------------------------------------------ */
-/*  fgets                                                              */
-/* ------------------------------------------------------------------ */
 char *fgets(char *s, int n, FILE *f)
 {
     if (!s || n <= 0 || !f)
@@ -309,10 +290,7 @@ char *fgets(char *s, int n, FILE *f)
     s[i] = '\0';
     return s;
 }
- 
-/* ------------------------------------------------------------------ */
-/*  fputs / puts                                                       */
-/* ------------------------------------------------------------------ */
+
 int fputs(const char *s, FILE *f)
 {
     if (!s || !f)
@@ -334,9 +312,6 @@ int putchar(int c)
     return fputc(c, stdout);
 }
 
-/* ------------------------------------------------------------------ */
-/*  fseek / ftell / rewind                                             */
-/* ------------------------------------------------------------------ */
 int fseek(FILE *f, long offset, int whence)
 {
     if (!f || f->error)
@@ -345,7 +320,6 @@ int fseek(FILE *f, long offset, int whence)
     if (_flush(f) == EOF)
         return -1;
  
-    /* discard read buffer */
     f->rpos = f->rlen = 0;
  
     int rc = seek(f->fd, (int64_t)offset, whence);
@@ -365,7 +339,6 @@ long ftell(FILE *f)
     if (_flush(f) == EOF)
         return -1L;
  
-    /* current OS position, then subtract unread buffered bytes */
     int pos = seek(f->fd, 0, SEEK_CUR);
     if (pos < 0)
         return -1L;
@@ -380,23 +353,16 @@ void rewind(FILE *f)
     f->eof   = 0;
     fseek(f, 0L, SEEK_SET);
 }
- 
-/* ------------------------------------------------------------------ */
-/*  feof / ferror / clearerr                                           */
-/* ------------------------------------------------------------------ */
+
 int  feof(FILE *f)    { return f && f->eof;   }
 int  ferror(FILE *f)  { return f && f->error; }
 void clearerr(FILE *f){ if (f) { f->eof = 0; f->error = 0; } }
- 
-/* ------------------------------------------------------------------ */
-/*  vfprintf / fprintf                                                 */
-/* ------------------------------------------------------------------ */
+
 int vfprintf(FILE *f, const char *fmt, va_list ap)
 {
     char buf[4096];
     int  n = vsnprintf(buf, sizeof(buf), fmt, ap);
     if (n <= 0) return n;
-    /* clamp to buffer */
     if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
     size_t written = fwrite(buf, 1, (size_t)n, f);
     return (int)written;
@@ -421,32 +387,28 @@ int sscanf(const char *buf, const char *fmt, ...)
     int assigned = 0;
     const char *b = buf;
 
-    for (; *fmt; fmt++) {
-        /* Match literal whitespace: skip all whitespace in input */
+    for (; *fmt; fmt++)
+    {
         if (*fmt == ' ' || *fmt == '\t' || *fmt == '\n') {
             while (*b == ' ' || *b == '\t' || *b == '\n') b++;
             continue;
         }
 
-        /* Match literal non-% character */
         if (*fmt != '%') {
             if (*b != *fmt) goto done;
             b++;
             continue;
         }
 
-        fmt++; /* skip '%' */
+        fmt++;
 
-        /* Suppress assignment flag */
         int suppress = 0;
         if (*fmt == '*') { suppress = 1; fmt++; }
 
-        /* Field width */
         int width = 0;
         while (*fmt >= '0' && *fmt <= '9')
             width = width * 10 + (*fmt++ - '0');
 
-        /* Length modifier */
         int is_long = 0, is_longlong = 0, is_short = 0;
         if (*fmt == 'h') { is_short = 1; fmt++; }
         else if (*fmt == 'l') { is_long = 1; fmt++; }
@@ -454,23 +416,22 @@ int sscanf(const char *buf, const char *fmt, ...)
 
         char spec = *fmt;
 
-        /* %% — match a literal percent */
-        if (spec == '%') {
+        if (spec == '%')
+        {
             if (*b != '%') goto done;
             b++;
             continue;
         }
 
-        /* Skip leading whitespace for most specifiers */
-        if (spec != 'c' && spec != '[') {
+        if (spec != 'c' && spec != '[')
+        {
             while (*b == ' ' || *b == '\t' || *b == '\n') b++;
         }
 
         if (!*b) goto done;
 
-        switch (spec) {
-
-        /* ---- %d / %i ---- */
+        switch (spec)
+        {
         case 'd':
         case 'i': {
             const char *start = b;
@@ -480,13 +441,15 @@ int sscanf(const char *buf, const char *fmt, ...)
             if (*b == '+') b++;
             else if (*b == '-') { neg = 1; b++; }
 
-            /* Auto-detect base for %i */
-            if (base == 0) {
-                if (*b == '0') {
+            if (base == 0)
+            {
+                if (*b == '0')
+                {
                     b++;
                     if (*b == 'x' || *b == 'X') { base = 16; b++; }
                     else base = 8;
-                } else base = 10;
+                }
+                else base = 10;
             }
 
             const char *num_start = b;
@@ -494,7 +457,8 @@ int sscanf(const char *buf, const char *fmt, ...)
             int digits = 0;
             int lim = width ? width - (int)(b - start) : INT_MAX;
 
-            while (digits < lim && *b) {
+            while (digits < lim && *b)
+            {
                 int d;
                 if (*b >= '0' && *b <= '9')      d = *b - '0';
                 else if (*b >= 'a' && *b <= 'f') d = *b - 'a' + 10;
@@ -505,10 +469,11 @@ int sscanf(const char *buf, const char *fmt, ...)
                 b++; digits++;
             }
 
-            if (b == num_start) goto done; /* no digits consumed */
+            if (b == num_start) goto done;
             if (neg) val = -val;
 
-            if (!suppress) {
+            if (!suppress)
+            {
                 if (is_longlong)     *va_arg(ap, long long *)      = val;
                 else if (is_long)    *va_arg(ap, long *)           = (long)val;
                 else if (is_short)   *va_arg(ap, short *)          = (short)val;
@@ -518,13 +483,11 @@ int sscanf(const char *buf, const char *fmt, ...)
             break;
         }
 
-        /* ---- %u / %o / %x / %X ---- */
         case 'u':
         case 'o':
         case 'x':
         case 'X': {
             int base = (spec == 'o') ? 8 : (spec == 'u') ? 10 : 16;
-            /* consume optional 0x prefix for hex */
             const char *start = b;
             if (base == 16 && *b == '0' && (*(b+1)=='x' || *(b+1)=='X')) b += 2;
 
@@ -555,7 +518,6 @@ int sscanf(const char *buf, const char *fmt, ...)
             break;
         }
 
-        /* ---- %s ---- */
         case 's': {
             int count = 0;
             int lim = width ? width : INT_MAX;
@@ -572,7 +534,6 @@ int sscanf(const char *buf, const char *fmt, ...)
             break;
         }
 
-        /* ---- %c ---- */
         case 'c': {
             int lim = width ? width : 1;
             char *dst = suppress ? NULL : va_arg(ap, char *);
@@ -588,24 +549,19 @@ int sscanf(const char *buf, const char *fmt, ...)
             break;
         }
 
-        /* ---- %n ---- */
         case 'n': {
             if (!suppress) {
                 *va_arg(ap, int *) = (int)(b - buf);
-                /* %n does not increment assigned */
             }
             break;
         }
 
-        /* ---- %[ scanset ] ---- */
         case '[': {
             fmt++;
             int negate = 0;
             if (*fmt == '^') { negate = 1; fmt++; }
 
-            /* build a 256-entry lookup table */
             unsigned char set[256] = {0};
-            /* a ']' as the very first char (after optional ^) is literal */
             if (*fmt == ']') { set[(unsigned char)']'] = 1; fmt++; }
             while (*fmt && *fmt != ']') {
                 if (*(fmt+1) == '-' && *(fmt+2) && *(fmt+2) != ']') {
@@ -619,7 +575,6 @@ int sscanf(const char *buf, const char *fmt, ...)
                     fmt++;
                 }
             }
-            /* fmt now points to ']' — the outer loop's fmt++ will advance past it */
 
             int count = 0;
             int lim   = width ? width : INT_MAX;
@@ -700,7 +655,6 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
         int width = 0;
         while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
 
-        /* precision: for integers, minimum digits (zero-padded); for strings, max chars */
         int precision = -1;
         if (*fmt == '.') {
             fmt++;
@@ -721,7 +675,6 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
             char *s = va_arg(ap, char *);
             if (!s) s = "(null)";
             if (precision >= 0) {
-                /* precision = max chars to print */
                 size_t slen = 0;
                 while (slen < (size_t)precision && s[slen]) slen++;
                 if (!left)

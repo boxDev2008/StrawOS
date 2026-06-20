@@ -5,6 +5,7 @@
 #include "memory/pmm.h"
 #include "filesystem/vfs.h"
 #include "arch/x86_64/idt.h"
+#include "libk/kprintf.h"
 
 #include "devices/pit.h"
 #include "devices/ps2keyboard.h"
@@ -15,10 +16,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
-
-/* -----------------------------------------------------------------------
- * Syscall numbers — filesystem / process / memory / device
- * ----------------------------------------------------------------------- */
 
 #define SYS_EXIT    1
 #define SYS_READ    3
@@ -76,7 +73,6 @@ int64_t k_write(int fd, const char *buf, size_t count)
 
     if (fd == STDOUT_FD || fd == STDERR_FD)
     {
-        extern void kputs(const char *str, size_t count);
         kputs(buf, count);
         return (int64_t)count;
     }
@@ -146,10 +142,6 @@ int64_t k_readdir(int fd, uint64_t index, void *out)
     return (int64_t)vfs_readdir(fd, index, (VDirent *)out);
 }
 
-/* -----------------------------------------------------------------------
- * Process syscall handlers
- * ----------------------------------------------------------------------- */
-
 int64_t k_spawn(const char *path, const char **argv)
 {
     Task *t = task_exec(path, argv);
@@ -180,10 +172,6 @@ int64_t k_exit(int code)
     task_exit();
     __builtin_unreachable();
 }
-
-/* -----------------------------------------------------------------------
- * Memory syscall handlers
- * ----------------------------------------------------------------------- */
 
 static void task_mem_init_if_needed(Task *t)
 {
@@ -243,10 +231,6 @@ int64_t k_munmap(uint64_t addr, size_t len)
     vmm_free_unmap(as, addr, page_count);
     return 0;
 }
-
-/* -----------------------------------------------------------------------
- * Device syscall handler
- * ----------------------------------------------------------------------- */
 
 int64_t k_device(int device_id, void *data)
 {
@@ -316,18 +300,16 @@ void syscall_int80_handler(InterruptFrame *frame)
     uint64_t arg1 = frame->rsi;
     uint64_t arg2 = frame->rdx;
     uint64_t arg3 = frame->r10;
-    /* uint64_t arg4 = frame->r8; */   /* unused for now */
+    //uint64_t arg4 = frame->r8; (unused for now)
 
     int64_t ret;
 
     switch (nr) {
 
-    /* ---- exit ---- */
     case SYS_EXIT:
         k_exit((int)arg0);
         __builtin_unreachable();
 
-    /* ---- filesystem ---- */
     case SYS_READ:
         ret = k_read((int)arg0, (char *)(uintptr_t)arg1, (size_t)arg2);
         break;
@@ -381,7 +363,6 @@ void syscall_int80_handler(InterruptFrame *frame)
         ret = k_readdir((int)arg0, (uint64_t)arg1, (void *)(uintptr_t)arg2);
         break;
 
-    /* ---- process ---- */
     case SYS_SPAWN:
         ret = k_spawn((const char *)(uintptr_t)arg0,
                       (const char **)(uintptr_t)arg1);
@@ -399,7 +380,6 @@ void syscall_int80_handler(InterruptFrame *frame)
         ret = k_waitpid((uint32_t)arg0);
         break;
 
-    /* ---- memory ---- */
     case SYS_MMAP:
         ret = k_mmap((size_t)arg0, (int)arg1);
         break;
@@ -408,7 +388,6 @@ void syscall_int80_handler(InterruptFrame *frame)
         ret = k_munmap(arg0, (size_t)arg1);
         break;
 
-    /* ---- device / time ---- */
     case SYS_DEVICE:
         ret = k_device((int)arg0, (void *)arg1);
         break;
@@ -417,7 +396,6 @@ void syscall_int80_handler(InterruptFrame *frame)
         ret = k_time();
         break;
 
-    /* ---- socket / network ---- */
     case SYS_SOCKET:
         ret = k_socket((int)arg0);
         break;
