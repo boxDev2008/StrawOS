@@ -1,7 +1,6 @@
 #pragma once
 #include <stdint.h>
 
-/* ELF64 types */
 typedef uint64_t Elf64_Addr;
 typedef uint64_t Elf64_Off;
 typedef uint16_t Elf64_Half;
@@ -10,14 +9,14 @@ typedef int32_t  Elf64_Sword;
 typedef uint64_t Elf64_Xword;
 typedef int64_t  Elf64_Sxword;
 
-#define EI_NIDENT   16
-#define ET_EXEC     2
-#define EM_X86_64   62
-#define PT_LOAD     1
+#define EI_NIDENT 16
+#define ET_EXEC 2
+#define EM_X86_64 62
+#define PT_LOAD 1
 
-#define PF_X        0x1   /* Execute */
-#define PF_W        0x2   /* Write */
-#define PF_R        0x4   /* Read */
+#define PF_X 0x1
+#define PF_W 0x2
+#define PF_R 0x4
 
 typedef struct {
     unsigned char e_ident[EI_NIDENT];

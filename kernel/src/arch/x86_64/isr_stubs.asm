@@ -1,28 +1,21 @@
-; kernel/arch/x86_64/isr_stubs.asm
-; Generates 256 interrupt stubs that push a uniform frame and call interrupt_dispatch()
-
 bits 64
 section .text
 
 extern interrupt_dispatch
 
-; ── Macros ────────────────────────────────────────────────────────────────────
-; ISR with no error code: push dummy 0 then vector
 %macro ISR_NOERR 1
 isr_stub_%1:
-    push qword 0        ; fake error code
-    push qword %1       ; vector number
+    push qword 0
+    push qword %1
     jmp  isr_common
 %endmacro
 
-; ISR where CPU pushes an error code: just push vector on top
 %macro ISR_ERR 1
 isr_stub_%1:
-    push qword %1       ; CPU already pushed error code before us
+    push qword %1
     jmp  isr_common
 %endmacro
 
-; ── Exception stubs (0–31) ───────────────────────────────────────────────────
 ISR_NOERR 0     ; #DE Divide Error
 ISR_NOERR 1     ; #DB Debug
 ISR_NOERR 2     ; NMI
@@ -56,26 +49,19 @@ ISR_ERR   29    ; #VC VMM Communication
 ISR_ERR   30    ; #SX Security Exception
 ISR_NOERR 31
 
-; ── Hardware IRQ stubs (32–47, remapped PIC) ─────────────────────────────────
 %assign i 32
 %rep 16
 ISR_NOERR i
 %assign i i+1
 %endrep
 
-; ── Remaining vectors (48–255) ───────────────────────────────────────────────
 %assign i 48
 %rep 208
 ISR_NOERR i
 %assign i i+1
 %endrep
 
-; ── Common handler ────────────────────────────────────────────────────────────
 isr_common:
-    ; At this point the stack looks like:
-    ;   [cpu] SS, RSP, RFLAGS, CS, RIP
-    ;   [us]  error_code, vector    ← RSP points here
-    ; Save all general purpose registers (in reverse pop order)
     push rax
     push rbx
     push rcx
@@ -92,7 +78,6 @@ isr_common:
     push r14
     push r15
 
-    ; RDI = pointer to the full InterruptFrame on the stack
     mov  rbp, rsp          ; save frame ptr in rbp — callee-saved, C preserves it
     mov  rdi, rsp          ; pass frame as arg1
     and  rsp, ~0xF         ; align for call
@@ -118,7 +103,6 @@ isr_common:
     add rsp, 16             ; discard vector + error_code
     iretq
 
-; ── Stub pointer table (exported to C) ───────────────────────────────────────
 section .rodata
 global isr_stub_table
 isr_stub_table:

@@ -51,51 +51,7 @@ volatile struct limine_framebuffer_request framebuffer_req = {
 };
 
 uint64_t g_hhdm_offset;
-static struct flanterm_context *ft_ctx;
-
-static inline void sse_enable(void) {
-    uint64_t cr0, cr4;
-
-    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
-    cr0 &= ~(1UL << 2);   // clear EM (bit 2) — no FPU emulation
-    cr0 |=  (1UL << 1);   // set   MP (bit 1) — monitor coprocessor
-    __asm__ volatile("mov %0, %%cr0" :: "r"(cr0));
-
-    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
-    cr4 |= (1UL << 9);    // set OSFXSR     (bit 9)  — enable FXSAVE/FXRSTOR + SSE
-    cr4 |= (1UL << 10);   // set OSXMMEXCPT (bit 10) — enable SSE exception handling
-    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4));
-
-    __asm__ volatile("fninit");   // initialise x87 FPU to clean state
-
-    // Initialise MXCSR to a known-good state: all SSE exceptions masked,
-    // round-to-nearest, no pending flags.  fninit does NOT touch MXCSR,
-    // so on real hardware it may contain whatever the firmware left behind,
-    // causing spurious #XF (#19) exceptions when userspace code (e.g.
-    // Nuklear's font baking) produces denormals or other FP edge cases.
-    uint32_t mxcsr = 0x1F80;  // IM|DM|ZM|OM|UM|PM all set, rounding = nearest
-    __asm__ volatile("ldmxcsr %0" :: "m"(mxcsr));
-}
-
-void kputs(const char *str, size_t count)
-{
-    const char *p = str;
-    const char *end = str + count;
-
-    while (p < end)
-    {
-        const char *newline = memchr(p, '\n', end - p);
-        if (!newline)
-        {
-            flanterm_write(ft_ctx, p, end - p);
-            break;
-        }
-        if (newline > p)
-            flanterm_write(ft_ctx, p, newline - p);
-        flanterm_write(ft_ctx, "\r\n", 2);
-        p = newline + 1;
-    }
-}
+struct flanterm_context *ft_ctx;
 
 void kernel_main(void)
 {

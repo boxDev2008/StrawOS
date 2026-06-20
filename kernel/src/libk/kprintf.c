@@ -4,7 +4,27 @@
 #include <stddef.h>
 #include <stdarg.h>
 
-extern void kputs(const char *str, size_t count);
+extern struct flanterm_context *ft_ctx;
+
+void kputs(const char *str, size_t count)
+{
+    const char *p = str;
+    const char *end = str + count;
+
+    while (p < end)
+    {
+        const char *newline = memchr(p, '\n', end - p);
+        if (!newline)
+        {
+            flanterm_write(ft_ctx, p, end - p);
+            break;
+        }
+        if (newline > p)
+            flanterm_write(ft_ctx, p, newline - p);
+        flanterm_write(ft_ctx, "\r\n", 2);
+        p = newline + 1;
+    }
+}
 
 static void kputchar(char c)
 {
@@ -61,7 +81,6 @@ static void kprint_padded(const char *str, int width, int zero_pad)
     int len = strlen(str);
     int pad = width - len;
 
-    /* Handle negative numbers correctly with zero padding */
     if (zero_pad && str[0] == '-') {
         kputchar('-');
         str++;
@@ -91,13 +110,11 @@ void kprintf(const char *fmt, ...)
             int zero_pad = 0;
             int width = 0;
 
-            /* Parse zero padding flag */
             if (*fmt == '0') {
                 zero_pad = 1;
                 fmt++;
             }
 
-            /* Parse width */
             while (*fmt >= '0' && *fmt <= '9') {
                 width = width * 10 + (*fmt - '0');
                 fmt++;

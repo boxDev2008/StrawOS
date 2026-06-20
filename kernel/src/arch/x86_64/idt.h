@@ -5,10 +5,8 @@ typedef struct {
     uint64_t r15, r14, r13, r12;
     uint64_t r11, r10, r9,  r8;
     uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
-    /* pushed by stub */
     uint64_t vector;
     uint64_t error_code;
-    /* pushed by CPU */
     uint64_t rip, cs, rflags, rsp, ss;
 } __attribute__((packed)) InterruptFrame;
 
@@ -20,5 +18,4 @@ void irq_mask(uint8_t irq);
 void irq_unmask(uint8_t irq);
 void pic_eoi(uint8_t irq);
 
-/* called from isr_stubs.asm */
 void interrupt_dispatch(InterruptFrame *frame);

@@ -11,7 +11,6 @@ typedef enum {
     VNODE_DIR  = 2,
 } VNodeType;
 
-/* Open flags */
 #define O_RDONLY  0x000
 #define O_WRONLY  0x001
 #define O_RDWR    0x002
@@ -20,30 +19,23 @@ typedef enum {
 #define O_TRUNC   0x200
 #define O_APPEND  0x400
 
-/* Stat */
 typedef struct {
     uint64_t  st_ino;
     VNodeType st_type;
     uint64_t  st_size;
 } VStat;
 
-/* Directory entry */
 #define VFS_NAME_MAX 255
 typedef struct {
     VNodeType d_type;
     char      d_name[VFS_NAME_MAX + 1];
 } VDirent;
 
-/* VNode operations */
 struct VNodeOps {
     int     (*lookup) (VNode *dir,  const char *name, VNode **out);
     int     (*create) (VNode *dir,  const char *name, VNode **out);
     int     (*mkdir)  (VNode *dir,  const char *name, VNode **out);
-    int     (*remove) (VNode *dir,  const char *name);   /* works for files and dirs */
-    /* rename: relink src_name in src_dir as dst_name in dst_dir.
-     * Called only after vfs_rename has validated types, checked for
-     * cross-mount moves, and already evicted any pre-existing dst entry.
-     * May be NULL; vfs_rename returns -EINVAL for drivers that omit it. */
+    int     (*remove) (VNode *dir,  const char *name);
     int     (*rename) (VNode *src_dir, const char *src_name,
                        VNode *dst_dir, const char *dst_name);
     ssize_t (*read)   (VNode *node, void *buf,       size_t len, uint64_t off);
@@ -68,7 +60,6 @@ struct OpenFile {
     int       flags;
 };
 
-/* Limits */
 #define VFS_MOUNT_MAX 16
 #define VFS_PATH_MAX  512
 #define VFS_FD_MAX    1024
@@ -79,7 +70,6 @@ struct Mount {
     bool   active;
 };
 
-/* Errors */
 #define ENOENT    2
 #define EBADF     9
 #define ENOMEM    12
@@ -92,12 +82,10 @@ struct Mount {
 #define ENOSPC    28
 #define ENOTEMPTY 39
 
-/* Seek */
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
 
-/* API */
 void    vfs_init(void);
 void    vnode_ref(VNode *node);
 void    vnode_unref(VNode *node);

@@ -10,19 +10,19 @@
 #define PTE_NOCACHE    (1UL << 4)
 #define PTE_ACCESSED   (1UL << 5)
 #define PTE_DIRTY      (1UL << 6)
-#define PTE_HUGEPAGE   (1UL << 7)   /* PS bit – 2 MiB or 1 GiB page */
+#define PTE_HUGEPAGE   (1UL << 7)
 #define PTE_GLOBAL     (1UL << 8)
-#define PTE_SHARED     (1UL << 9)   /* SW bit: page is borrowed (device/shared), do NOT free physical page on unmap */
-#define PTE_NX         (1UL << 63)  /* No-Execute (requires EFER.NXE)  */
+#define PTE_SHARED     (1UL << 9)
+#define PTE_NX         (1UL << 63)
 
 #define VMM_KERNEL_RW  (PTE_PRESENT | PTE_WRITABLE | PTE_GLOBAL | PTE_NX)
 #define VMM_KERNEL_RO  (PTE_PRESENT | PTE_GLOBAL   | PTE_NX)
-#define VMM_KERNEL_EX  (PTE_PRESENT | PTE_GLOBAL)               /* executable */
+#define VMM_KERNEL_EX  (PTE_PRESENT | PTE_GLOBAL)
 #define VMM_USER_RW    (PTE_PRESENT | PTE_WRITABLE | PTE_USER  | PTE_NX)
 #define VMM_USER_RO    (PTE_PRESENT | PTE_USER     | PTE_NX)
 #define VMM_USER_EX    (PTE_PRESENT | PTE_USER)
 
-#define PTE_ADDR_MASK  0x000FFFFFFFFFF000UL  /* bits 12–51 hold the PFN */
+#define PTE_ADDR_MASK  0x000FFFFFFFFFF000UL
 
 typedef struct
 {
@@ -51,7 +51,6 @@ uint64_t vmm_alloc_map(AddressSpace *as, uint64_t virt, uint64_t page_count, uin
 
 void vmm_free_unmap(AddressSpace *as, uint64_t virt, uint64_t page_count);
 
-/* Like vmm_free_unmap but never calls pmm_free_page — for device/shared mappings. */
 void vmm_unmap_shared(AddressSpace *as, uint64_t virt, uint64_t page_count);
 
 static inline void vmm_invlpg(uint64_t virt)

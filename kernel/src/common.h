@@ -21,11 +21,11 @@ typedef long ssize_t;
 #define PAGE_SIZE   0x1000UL
 #define PAGE_SHIFT  12
 
-#define HHDM_BASE        0xFFFF800000000000UL   /* physical → virtual via HHDM */
-#define KERNEL_BASE      0xFFFFFFFF80000000UL   /* kernel link address */
-#define HEAP_BASE        0xFFFFFF8000000000UL   /* kernel heap region */
+#define HHDM_BASE        0xFFFF800000000000UL
+#define KERNEL_BASE      0xFFFFFFFF80000000UL
+#define HEAP_BASE        0xFFFFFF8000000000UL
 #define HEAP_MAX         0xFFFFFF9000000000UL
-#define USER_STACK_TOP   0x00007FFFFFFFE000UL   /* top of user stack */
+#define USER_STACK_TOP   0x00007FFFFFFFE000UL
 #define USER_SPACE_MAX   0x00007FFFFFFFFFFFUL
 
 extern uint64_t g_hhdm_offset;
