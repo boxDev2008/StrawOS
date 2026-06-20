@@ -7,6 +7,7 @@
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
 #include "arch/x86_64/io.h"
+#include "arch/x86_64/sse.h"
 #include "memory/pmm.h"
 #include "memory/vmm.h"
 #include "memory/heap.h"
