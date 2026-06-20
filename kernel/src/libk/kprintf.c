@@ -1,6 +1,8 @@
 #include "kprintf.h"
 #include "string.h"
 
+#include "flanterm/flanterm.h"
+
 #include <stddef.h>
 #include <stdarg.h>
 
