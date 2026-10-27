@@ -1,0 +1,9 @@
+/build/
+/strawos-x86_64.iso
+/modules/bin/
+/modules/obj/
+*.o
+*.a
+*.elf
+__pycache__/
+/modules/root/config/discord/

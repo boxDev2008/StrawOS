@@ -1,0 +1,15 @@
+Wallpapers from the GNOME Backgrounds collection (dark variants), resized to 1920x1080.
+Copyright the gnome-backgrounds contributors.
+License: Creative Commons Attribution-Share Alike 3.0 United States
+  https://creativecommons.org/licenses/by-sa/3.0/us/
+Source: https://gitlab.gnome.org/GNOME/gnome-backgrounds/-/tree/main/backgrounds
+
+amber.jpg  <-  backgrounds/amber-d.jxl
+blobs.jpg  <-  backgrounds/blobs-d.svg
+curvy.jpg  <-  backgrounds/curvy-d.jxl
+drool.jpg  <-  backgrounds/drool-d.svg
+fold.jpg  <-  backgrounds/fold-d.jxl
+map.png  <-  backgrounds/map-d.svg
+morphogenesis.jpg  <-  backgrounds/morphogenesis-d.svg
+sheet.jpg  <-  backgrounds/sheet-d.jxl
+symbolic.jpg  <-  backgrounds/symbolic-d.jxl

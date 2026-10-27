@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Paint
+Comment=Sketch with the mouse
+Icon=/share/icons/paint.png
+Exec=/bin/paint.elf

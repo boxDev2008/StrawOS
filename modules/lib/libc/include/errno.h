@@ -1,0 +1,57 @@
+#pragma once
+
+#define EPERM     1
+#define ENOENT    2
+#define ESRCH     3
+#define EINTR     4
+#define EIO       5
+#define ENXIO     6
+#define E2BIG     7
+#define ENOEXEC   8
+#define EBADF     9
+#define ENOMEM    12
+#define EACCES    13
+#define EEXIST    17
+#define ENOTDIR   20
+#define EISDIR    21
+#define EINVAL    22
+#define EMFILE    24
+#define ENOTTY    25
+#define EFBIG     27
+#define ENOSPC    28
+#define ESPIPE    29
+#define EROFS     30
+#define EMLINK    31
+#define EDOM      33
+#define ERANGE    34
+#define EDEADLK   35
+#define ENAMETOOLONG 36
+#define ENOSYS    38
+#define ENOTEMPTY 39
+#define ELOOP     40
+#define EWOULDBLOCK EAGAIN
+#define ENODATA   61
+#define EOVERFLOW 75
+#define EILSEQ    84
+#define ENOTSOCK  88
+#define EPROTONOSUPPORT 93
+#define EOPNOTSUPP 95
+#define ENOTSUP   EOPNOTSUPP
+#define EAFNOSUPPORT 97
+#define ECONNRESET 104
+#define ENOBUFS   105
+#define EISCONN   106
+#define ENOTCONN  107
+#define EHOSTUNREACH 113
+#define EALREADY  114
+#define EINPROGRESS 115
+#define ECANCELED 125
+#define EAGAIN       11
+#define EPIPE        32
+#define EADDRINUSE   98
+#define ECONNREFUSED 111
+#define ENETDOWN     100
+#define ETIMEDOUT    110
+
+extern int errno;
+int *__errno_location(void);

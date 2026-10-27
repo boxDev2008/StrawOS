@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Terminal
+Comment=Lua shell
+Icon=/share/icons/terminal.png
+Exec=/bin/terminal.elf

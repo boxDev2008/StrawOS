@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Pictures
+Comment=Browse the picture folder
+Icon=/share/icons/images.png
+Exec=/bin/files.elf /pictures

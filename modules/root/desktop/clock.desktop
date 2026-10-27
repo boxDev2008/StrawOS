@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Clock
+Comment=The time, the analog way
+Icon=/share/icons/clock.png
+Exec=/bin/clock.elf

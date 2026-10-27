@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=System Monitor
+Comment=Memory usage and uptime
+Icon=/share/icons/sysmon.png
+Exec=/bin/sysmon.elf

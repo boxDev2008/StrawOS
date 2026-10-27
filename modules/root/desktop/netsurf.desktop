@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=NetSurf
+Comment=Web browser with full CSS support
+Icon=/share/icons/netsurf.png
+Exec=/bin/netsurf.elf

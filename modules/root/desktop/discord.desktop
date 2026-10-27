@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Discord
+Comment=Chat on Discord
+Icon=/share/icons/discord.png
+Exec=/bin/discord.elf

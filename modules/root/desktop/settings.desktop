@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Settings
+Comment=Wallpaper, panel and mouse
+Icon=/share/icons/settings.png
+Exec=/bin/settings.elf

@@ -1,0 +1,43 @@
+[submodule "limine"]
+	path = limine
+	url = https://codeberg.org/Limine/Limine.git
+	branch = v11.x-binary
+[submodule "modules/lib/lua"]
+	path = modules/lib/lua
+	url = https://github.com/lua/lua
+[submodule "modules/lib/bearssl"]
+	path = modules/lib/bearssl
+	url = https://www.bearssl.org/git/BearSSL
+[submodule "modules/lib/netsurf/libparserutils"]
+	path = modules/lib/netsurf/libparserutils
+	url = https://github.com/netsurf-browser/libparserutils.git
+[submodule "modules/lib/netsurf/libwapcaplet"]
+	path = modules/lib/netsurf/libwapcaplet
+	url = https://github.com/netsurf-browser/libwapcaplet.git
+[submodule "modules/lib/netsurf/libcss"]
+	path = modules/lib/netsurf/libcss
+	url = https://github.com/netsurf-browser/libcss.git
+[submodule "modules/lib/netsurf/libhubbub"]
+	path = modules/lib/netsurf/libhubbub
+	url = https://github.com/netsurf-browser/libhubbub.git
+[submodule "modules/lib/netsurf/libdom"]
+	path = modules/lib/netsurf/libdom
+	url = https://github.com/netsurf-browser/libdom.git
+[submodule "modules/lib/netsurf/libnsutils"]
+	path = modules/lib/netsurf/libnsutils
+	url = https://github.com/netsurf-browser/libnsutils.git
+[submodule "modules/lib/netsurf/libnsbmp"]
+	path = modules/lib/netsurf/libnsbmp
+	url = https://github.com/netsurf-browser/libnsbmp.git
+[submodule "modules/lib/netsurf/libnsgif"]
+	path = modules/lib/netsurf/libnsgif
+	url = https://github.com/netsurf-browser/libnsgif.git
+[submodule "modules/lib/netsurf/netsurf"]
+	path = modules/lib/netsurf/netsurf
+	url = https://github.com/netsurf-browser/netsurf.git
+[submodule "modules/lib/stb"]
+	path = modules/lib/stb
+	url = https://github.com/nothings/stb.git
+[submodule "modules/lib/tinycc"]
+	path = modules/lib/tinycc
+	url = https://repo.or.cz/tinycc.git

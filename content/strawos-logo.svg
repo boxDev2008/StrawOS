@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>StrawOS</title>
+  <!-- body: solid silhouette underneath so facet seams never show the background -->
+  <polygon points="16.64,51.2 38.4,34.56 89.6,34.56 111.36,51.2 97.28,89.6 64,121.6 30.72,89.6" fill="#c8243a"/>
+  <g id="facets">
+    <polygon points="16.64,51.2 38.4,34.56 60.16,67.84" fill="#ff636e"/>
+    <polygon points="38.4,34.56 89.6,34.56 60.16,67.84" fill="#f44858"/>
+    <polygon points="89.6,34.56 111.36,51.2 60.16,67.84" fill="#e23448"/>
+    <polygon points="111.36,51.2 97.28,89.6 60.16,67.84" fill="#c8243a"/>
+    <polygon points="97.28,89.6 64,121.6 60.16,67.84" fill="#aa182e"/>
+    <polygon points="64,121.6 30.72,89.6 60.16,67.84" fill="#c42238"/>
+    <polygon points="30.72,89.6 16.64,51.2 60.16,67.84" fill="#e83c4e"/>
+  </g>
+  <g id="seeds" fill="#ffd6a0">
+    <polygon points="39.68,65.28 43.52,60.16 46.08,66.56"/>
+    <polygon points="71.68,53.76 75.52,48.64 78.08,55.04"/>
+    <polygon points="88.32,70.4 92.16,65.28 93.44,72.96"/>
+    <polygon points="57.6,80.64 61.44,75.52 64,81.92"/>
+    <polygon points="74.24,98.56 78.08,93.44 79.36,99.84"/>
+    <polygon points="38.4,79.36 42.24,74.24 44.8,80.64"/>
+  </g>
+  <polygon id="stem" points="58.88,30.72 69.12,30.72 76.8,6.4 67.84,5.12" fill="#4e9646"/>
+  <g id="leaves">
+    <polygon points="64,37.12 64,25.6 35.84,15.36 46.08,38.4" fill="#40a048"/>
+    <polygon points="64,37.12 64,25.6 35.84,15.36" fill="#7cd660"/>
+    <polygon points="64,37.12 64,25.6 92.16,15.36 81.92,38.4" fill="#40a048"/>
+    <polygon points="64,37.12 64,25.6 92.16,15.36" fill="#7cd660"/>
+    <polygon points="64,37.12 46.08,28.16 12.8,38.4 38.4,56.32" fill="#40a048"/>
+    <polygon points="64,37.12 46.08,28.16 12.8,38.4" fill="#7cd660"/>
+    <polygon points="64,37.12 81.92,28.16 115.2,38.4 89.6,56.32" fill="#40a048"/>
+    <polygon points="64,37.12 81.92,28.16 115.2,38.4" fill="#7cd660"/>
+    <polygon points="64,37.12 51.2,38.4 64,58.88 76.8,38.4" fill="#40a048"/>
+    <polygon points="64,37.12 51.2,38.4 64,58.88" fill="#7cd660"/>
+  </g>
+</svg>

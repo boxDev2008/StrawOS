@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Calculator
+Comment=Quick arithmetic
+Icon=/share/icons/calculator.png
+Exec=/bin/calc.elf

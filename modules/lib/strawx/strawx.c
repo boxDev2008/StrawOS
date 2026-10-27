@@ -1,0 +1,30 @@
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <socket.h>
+#include <poll.h>
+#include <time.h>
+#include <ctype.h>
+#include <sys/stat.h>
+#include <stdio.h>
+
+#include "strawx.h"
+#include "ui.h"
+#include "image.h"
+#include "desktop.h"
+#include "settings.h"
+#include "wallpaper.h"
+#include "theme.h"
+
+#include "fonts.c"
+#include "gfx.c"
+#include "ui.c"
+#include "client.c"
+#include "image.c"
+#include "desktop.c"
+#include "settings.c"
+#include "wallpaper.c"
+#include "theme.c"

@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Notes
+Comment=Write and edit text
+Icon=/share/icons/notes.png
+Exec=/bin/notes.elf

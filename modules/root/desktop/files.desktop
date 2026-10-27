@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Files
+Comment=Browse files and folders
+Icon=/share/icons/files.png
+Exec=/bin/files.elf

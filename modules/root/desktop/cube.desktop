@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Cube
+Comment=A spinning 3D demo
+Icon=/share/icons/cube.png
+Exec=/bin/cube.elf
