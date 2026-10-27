@@ -57,6 +57,7 @@ typedef enum
     ACT_RENAME,
     ACT_DELETE,
     ACT_WALLPAPER,
+    ACT_TERMINAL,
     ACT_PROPERTIES,
     ACT_NEW_FILE,
     ACT_NEW_FOLDER,
@@ -850,6 +851,19 @@ static void open_in_notes(int index)
     set_status(msg, false);
 }
 
+static void open_in_terminal(int index)
+{
+    char dir[PATH_MAX_LEN], msg[300];
+    if (index >= 0 && index < F.count && F.entries[index].type == STAT_DIR)
+        join_path(dir, F.cwd, F.entries[index].name);
+    else
+        strcpy(dir, F.cwd);
+    const char *argv[] = { TERMINAL_PATH, "--cwd", dir, NULL };
+    bool ok = spawn(TERMINAL_PATH, argv);
+    snprintf(msg, sizeof(msg), ok ? "Opened terminal in %s" : "Couldn't open terminal in %s", dir);
+    set_status(msg, !ok);
+}
+
 static void set_wallpaper(int index)
 {
     if (index < 0 || index >= F.count)
@@ -1416,6 +1430,8 @@ static void open_menu(int x, int y, int target)
             menu_add("Edit in Notes", "", ACT_EDIT, true);
         if (file && sx_image_is_supported(e->name))
             menu_add("Set as Wallpaper", "", ACT_WALLPAPER, true);
+        if (e->type == STAT_DIR)
+            menu_add("Open in Terminal", "", ACT_TERMINAL, true);
         menu_add("", "", ACT_SEPARATOR, true);
         menu_add("Cut", "Ctrl+X", ACT_CUT, removable);
         menu_add("Copy", "Ctrl+C", ACT_COPY, removable);
@@ -1433,6 +1449,8 @@ static void open_menu(int x, int y, int target)
         menu_add("", "", ACT_SEPARATOR, true);
         menu_add("Paste", "Ctrl+V", ACT_PASTE, F.clip_path[0] != 0);
         menu_add("Refresh", "F5", ACT_REFRESH, true);
+        menu_add("", "", ACT_SEPARATOR, true);
+        menu_add("Open in Terminal", "", ACT_TERMINAL, true);
     }
 
     int h = menu_height();
@@ -1461,6 +1479,7 @@ static void run_action(Action action, int target)
         case ACT_RENAME:     start_prompt(PROMPT_RENAME); break;
         case ACT_DELETE:     start_prompt(PROMPT_DELETE); break;
         case ACT_WALLPAPER:  set_wallpaper(target); break;
+        case ACT_TERMINAL:   open_in_terminal(target); break;
         case ACT_PROPERTIES: open_properties(target); break;
         case ACT_NEW_FILE:   start_prompt(PROMPT_NEW_FILE); break;
         case ACT_NEW_FOLDER: start_prompt(PROMPT_NEW_FOLDER); break;

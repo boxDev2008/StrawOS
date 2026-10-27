@@ -78,9 +78,12 @@ int chdir(const char *path)
 
 char *realpath(const char *path, char *resolved)
 {
-    static char buf[PATH_BUF];
-    char *out = resolved ? resolved : buf;
-    return abs_path(path, out) ? out : NULL;
+    char buf[PATH_BUF];
+    if (!abs_path(path, buf))
+        return NULL;
+    if (resolved)
+        return strcpy(resolved, buf);
+    return strdup(buf);
 }
 
 int dup2(int fd, int target)

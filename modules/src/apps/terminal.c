@@ -639,8 +639,13 @@ static bool start_shell(void)
 
 int main(int argc, char **argv)
 {
-    if (argc > 2 && strcmp(argv[1], "--run") == 0)
-        run_script = argv[2];
+    for (int i = 1; i + 1 < argc; i += 2)
+    {
+        if (strcmp(argv[i], "--run") == 0)
+            run_script = argv[i + 1];
+        else if (strcmp(argv[i], "--cwd") == 0)
+            chdir(argv[i + 1]);
+    }
 
     if (sx_connect() != 0)
     {
