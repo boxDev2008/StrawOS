@@ -63,7 +63,7 @@ static const char *abs_path(const char *path, char *out)
 
 char *getcwd(char *buf, size_t size)
 {
-    if ((int64_t)syscall(SYS_GETCWD, (uint64_t)buf, size, 0, 0) < 0)
+    if ((int64_t)kcall(KCALL_GETCWD, (uint64_t)buf, size, 0, 0) < 0)
         return NULL;
     return buf;
 }
@@ -73,7 +73,7 @@ int chdir(const char *path)
     char full[PATH_BUF];
     if (!abs_path(path, full))
         return -1;
-    return (int)syscall(SYS_CHDIR, (uint64_t)full, 0, 0, 0);
+    return (int)kcall(KCALL_CHDIR, (uint64_t)full, 0, 0, 0);
 }
 
 char *realpath(const char *path, char *resolved)
@@ -88,7 +88,7 @@ char *realpath(const char *path, char *resolved)
 
 int dup2(int fd, int target)
 {
-    return (int)syscall(SYS_DUP2, (uint64_t)(int64_t)fd, (uint64_t)(int64_t)target, 0, 0);
+    return (int)kcall(KCALL_DUP2, (uint64_t)(int64_t)fd, (uint64_t)(int64_t)target, 0, 0);
 }
 
 static char *empty_environ[] = { NULL };
@@ -111,7 +111,7 @@ int open(const char *path, int flags, ...)
     }
     flags &= ~O_TRUNC;
 
-    return (int)syscall(SYS_OPEN, (uint64_t)full, (uint64_t)flags, 0, 0);
+    return (int)kcall(KCALL_OPEN, (uint64_t)full, (uint64_t)flags, 0, 0);
 }
 
 int execvp(const char *file, char *const argv[])
@@ -124,17 +124,17 @@ int execvp(const char *file, char *const argv[])
 
 ssize_t write(int fd, const void *buf, size_t count)
 {
-    return (ssize_t)syscall(SYS_WRITE, (uint64_t)fd, (uint64_t)buf, count, 0);
+    return (ssize_t)kcall(KCALL_WRITE, (uint64_t)fd, (uint64_t)buf, count, 0);
 }
 
 ssize_t read(int fd, void *buf, size_t count)
 {
-    return (ssize_t)syscall(SYS_READ, (uint64_t)fd, (uint64_t)buf, count, 0);
+    return (ssize_t)kcall(KCALL_READ, (uint64_t)fd, (uint64_t)buf, count, 0);
 }
 
 int close(int fd)
 {
-    return (int)syscall(SYS_CLOSE, (uint64_t)fd, 0, 0, 0);
+    return (int)kcall(KCALL_CLOSE, (uint64_t)fd, 0, 0, 0);
 }
 
 int mkdir(const char *path, unsigned int mode)
@@ -143,12 +143,12 @@ int mkdir(const char *path, unsigned int mode)
     char full[PATH_BUF];
     if (!abs_path(path, full))
         return -1;
-    return (int)syscall(SYS_MKDIR, (uint64_t)full, 0, 0, 0);
+    return (int)kcall(KCALL_MKDIR, (uint64_t)full, 0, 0, 0);
 }
 
 int readdir(int fd, struct dirent *out)
 {
-    return (int)syscall(SYS_READDIR, (uint64_t)fd, (uint64_t)out, 0, 0);
+    return (int)kcall(KCALL_READDIR, (uint64_t)fd, (uint64_t)out, 0, 0);
 }
 
 int rename(const char *from, const char *to)
@@ -156,7 +156,7 @@ int rename(const char *from, const char *to)
     char a[PATH_BUF], b[PATH_BUF];
     if (!abs_path(from, a) || !abs_path(to, b))
         return -1;
-    return (int)syscall(SYS_RENAME, (uint64_t)a, (uint64_t)b, 0, 0);
+    return (int)kcall(KCALL_RENAME, (uint64_t)a, (uint64_t)b, 0, 0);
 }
 
 int remove(const char *path)
@@ -169,12 +169,12 @@ int unlink(const char *path)
     char full[PATH_BUF];
     if (!abs_path(path, full))
         return -1;
-    return (int)syscall(SYS_UNLINK, (uint64_t)full, 0, 0, 0);
+    return (int)kcall(KCALL_UNLINK, (uint64_t)full, 0, 0, 0);
 }
 
 int64_t lseek(int fd, int64_t offset, int whence)
 {
-    return (int64_t)syscall(SYS_LSEEK, (uint64_t)fd, (uint64_t)offset, (uint64_t)whence, 0);
+    return (int64_t)kcall(KCALL_LSEEK, (uint64_t)fd, (uint64_t)offset, (uint64_t)whence, 0);
 }
 
 static void stat_fill_posix(struct stat *st)
@@ -197,7 +197,7 @@ int stat(const char *path, struct stat *statbuf)
     char full[PATH_BUF];
     if (!abs_path(path, full))
         return -1;
-    int rc = (int)syscall(SYS_STAT, (uint64_t)full, (uint64_t)statbuf, 0, 0);
+    int rc = (int)kcall(KCALL_STAT, (uint64_t)full, (uint64_t)statbuf, 0, 0);
     if (rc < 0)
     {
         errno = ENOENT;
@@ -214,7 +214,7 @@ int lstat(const char *path, struct stat *statbuf)
 
 int fstat(int fd, struct stat *statbuf)
 {
-    int rc = (int)syscall(SYS_FSTAT, (uint64_t)fd, (uint64_t)statbuf, 0, 0);
+    int rc = (int)kcall(KCALL_FSTAT, (uint64_t)fd, (uint64_t)statbuf, 0, 0);
     if (rc < 0)
     {
         errno = EBADF;
@@ -226,7 +226,7 @@ int fstat(int fd, struct stat *statbuf)
 
 void wait(uint32_t ms)
 {
-    syscall(SYS_WAIT, ms, 0, 0, 0);
+    kcall(KCALL_WAIT, ms, 0, 0, 0);
 }
 
 pid_t spawn(const char *path, const char *argv[])
@@ -234,22 +234,22 @@ pid_t spawn(const char *path, const char *argv[])
     char full[PATH_BUF];
     if (!abs_path(path, full))
         return 0;
-    return (pid_t)syscall(SYS_SPAWN, (uint64_t)full, (uint64_t)argv, 0, 0);
+    return (pid_t)kcall(KCALL_SPAWN, (uint64_t)full, (uint64_t)argv, 0, 0);
 }
 
 int kill(pid_t pid)
 {
-    return (int)syscall(SYS_KILL, (uint64_t)pid, 0, 0, 0);
+    return (int)kcall(KCALL_KILL, (uint64_t)pid, 0, 0, 0);
 }
 
 pid_t getpid(void)
 {
-    return (pid_t)syscall(SYS_GETPID, 0, 0, 0, 0);
+    return (pid_t)kcall(KCALL_GETPID, 0, 0, 0, 0);
 }
 
 int task_status(pid_t pid, int *code)
 {
-    return (int)syscall(SYS_WAITPID, (uint64_t)pid, (uint64_t)code, 0, 0);
+    return (int)kcall(KCALL_WAITPID, (uint64_t)pid, (uint64_t)code, 0, 0);
 }
 
 int waitpid(pid_t pid, uint32_t flags)

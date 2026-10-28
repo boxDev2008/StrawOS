@@ -8,6 +8,8 @@ SECTIONS
 
     .text : ALIGN(4K)
     {
+        /* kernel call table, must stay at the very start of the image */
+        KEEP(*(.kcall_table))
         *(.text*)
     } :text
 
@@ -35,3 +37,5 @@ SECTIONS
 
     __kernel_virt_end = .;
 }
+
+ASSERT(kcall_table == 0xffffffff80000000, "kcall_table must sit at KCALL_TABLE_ADDR")

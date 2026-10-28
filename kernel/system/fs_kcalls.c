@@ -26,7 +26,7 @@ FsDirent;
 
 static FdSlot fd_table[FD_MAX];
 
-void fs_syscalls_init(void)
+void fs_kcalls_init(void)
 {
     memset(fd_table, 0, sizeof(fd_table));
     fd_table[0].used = true;
@@ -120,7 +120,7 @@ int64_t fs_sys_open(const char *path, uint32_t flags)
     int fd = fd_alloc();
     if (fd == FD_INVALID)
     {
-        kprintf("fs_syscalls: open(%s) failed, fd table full\n", path);
+        kprintf("fs_kcalls: open(%s) failed, fd table full\n", path);
         return FD_INVALID;
     }
 

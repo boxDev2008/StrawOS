@@ -352,7 +352,7 @@ void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
         errno = EINVAL;
         return MAP_FAILED;
     }
-    void *mem = (void *)syscall(SYS_MEM_ALLOC, length, 0, 0, 0);
+    void *mem = (void *)kcall(KCALL_MEM_ALLOC, length, 0, 0, 0);
     if (!mem)
     {
         errno = ENOMEM;
@@ -364,7 +364,7 @@ void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
         int64_t saved = lseek(fd, 0, SEEK_CUR);
         if (lseek(fd, offset, SEEK_SET) < 0)
         {
-            syscall(SYS_MEM_FREE, (uint64_t)mem, length, 0, 0);
+            kcall(KCALL_MEM_FREE, (uint64_t)mem, length, 0, 0);
             errno = EBADF;
             return MAP_FAILED;
         }
@@ -384,7 +384,7 @@ void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
 
 int munmap(void *addr, size_t length)
 {
-    if ((int64_t)syscall(SYS_MEM_FREE, (uint64_t)addr, length, 0, 0) < 0)
+    if ((int64_t)kcall(KCALL_MEM_FREE, (uint64_t)addr, length, 0, 0) < 0)
     {
         errno = EINVAL;
         return -1;

@@ -48,7 +48,7 @@ static void *heap_carve(size_t bytes)
 {
     if (heap_arena_left < bytes)
     {
-        uint8_t *arena = (uint8_t *)syscall(SYS_MEM_ALLOC, HEAP_ARENA_SIZE, 0, 0, 0);
+        uint8_t *arena = (uint8_t *)kcall(KCALL_MEM_ALLOC, HEAP_ARENA_SIZE, 0, 0, 0);
         if (!arena)
             return NULL;
         heap_arena = arena;
@@ -69,7 +69,7 @@ void *malloc(size_t size)
     {
         if (size > SIZE_MAX - sizeof(HeapHeader) - HEAP_PAGE_SIZE)
             return NULL;
-        h = (HeapHeader *)syscall(SYS_MEM_ALLOC, size + sizeof(HeapHeader), 0, 0, 0);
+        h = (HeapHeader *)kcall(KCALL_MEM_ALLOC, size + sizeof(HeapHeader), 0, 0, 0);
         if (!h)
             return NULL;
         h->cls = HEAP_LARGE;
@@ -108,7 +108,7 @@ void free(void *ptr)
     if (h->cls == HEAP_LARGE)
     {
         h->magic = 0;
-        syscall(SYS_MEM_FREE, (uint64_t)h, h->size + sizeof(HeapHeader), 0, 0);
+        kcall(KCALL_MEM_FREE, (uint64_t)h, h->size + sizeof(HeapHeader), 0, 0);
         return;
     }
 
@@ -170,7 +170,7 @@ __attribute__((weak)) void exit(int code)
         atexit_handlers[--atexit_count]();
     fflush(stdout);
     fflush(stderr);
-    syscall(SYS_EXIT, (uint64_t)(int64_t)code, 0, 0, 0);
+    kcall(KCALL_EXIT, (uint64_t)(int64_t)code, 0, 0, 0);
     for (;;)
         ;
 }

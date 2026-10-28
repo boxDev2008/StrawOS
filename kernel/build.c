@@ -79,14 +79,14 @@ static struct limine_framebuffer *limine_framebuffer;
 #include "system/task.c"
 #include "system/user_pages.c"
 
-#include "system/syscall.h"
+#include "system/kcall.h"
 #include "system/socket.h"
 #include "devices/rtc.h"
 
-#include "system/fs_syscalls.c"
+#include "system/fs_kcalls.c"
 #include "system/socket.c"
 #include "devices/rtc.c"
-#include "system/syscall.c"
+#include "system/kcall.c"
 
 #include "base/gdt.h"
 #include "base/gdt.c"

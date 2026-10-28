@@ -35,7 +35,7 @@
 #include "include/posix_compat/sys/mman.h"
 #include "include/posix_compat/arpa/inet.h"
 
-#include "include/sys/syscall.h"
+#include "include/kcall.h"
 
 #include "src/assert.c"
 #include "src/ctype.c"

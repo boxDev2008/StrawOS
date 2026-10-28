@@ -237,9 +237,6 @@ void idt_init(void)
     idt_set_entry(IRQ_MOUSE, irq_stub_0x23, IDT_GATE_INTERRUPT);
     idt_set_entry(LAPIC_SPURIOUS_VECTOR, spurious_stub, IDT_GATE_INTERRUPT);
 
-    extern void syscall_stub(void);
-    idt_set_entry(0x80, syscall_stub, IDT_GATE_TRAP);
-
     idt_desc.limit = sizeof(idt) - 1;
     idt_desc.base = (uint64_t)&idt;
 

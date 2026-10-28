@@ -1,51 +1,48 @@
 #pragma once
 
-#define SYS_EXIT 1
+#define KCALL_TABLE_ADDR 0xffffffff80000000ULL
 
-#define SYS_OPEN   2
-#define SYS_CLOSE  3
-#define SYS_READ   4
-#define SYS_WRITE  5
-#define SYS_IOCTL  6
-#define SYS_MKDIR  7
-#define SYS_READDIR 8
-#define SYS_LSEEK   9
-#define SYS_STAT   10
-#define SYS_FSTAT  11
-#define SYS_UNLINK 12
+#define KCALL_EXIT 1
 
-#define SYS_MEM_ALLOC 13
-#define SYS_MEM_FREE  14
-#define SYS_CHDIR  15
-#define SYS_GETCWD 16
+#define KCALL_OPEN   2
+#define KCALL_CLOSE  3
+#define KCALL_READ   4
+#define KCALL_WRITE  5
+#define KCALL_IOCTL  6
+#define KCALL_MKDIR  7
+#define KCALL_READDIR 8
+#define KCALL_LSEEK   9
+#define KCALL_STAT   10
+#define KCALL_FSTAT  11
+#define KCALL_UNLINK 12
 
-#define SYS_WAIT 17
+#define KCALL_MEM_ALLOC 13
+#define KCALL_MEM_FREE  14
+#define KCALL_CHDIR  15
+#define KCALL_GETCWD 16
 
-#define SYS_SPAWN 18
-#define SYS_KILL 19
-#define SYS_WAITPID 20
-#define SYS_GETPID 21
+#define KCALL_WAIT 17
 
-#define SYS_SOCKET     22
-#define SYS_BIND       23
-#define SYS_LISTEN     24
-#define SYS_ACCEPT     25
-#define SYS_CONNECT    26
-#define SYS_POLL       27
+#define KCALL_SPAWN 18
+#define KCALL_KILL 19
+#define KCALL_WAITPID 20
+#define KCALL_GETPID 21
 
-#define SYS_UPTIME     28
-#define SYS_YIELD      29
-#define SYS_RENAME     30
-#define SYS_DUP2       31
+#define KCALL_SOCKET     22
+#define KCALL_BIND       23
+#define KCALL_LISTEN     24
+#define KCALL_ACCEPT     25
+#define KCALL_CONNECT    26
+#define KCALL_POLL       27
 
-static inline uint64_t syscall(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4)
+#define KCALL_UPTIME     28
+#define KCALL_YIELD      29
+#define KCALL_RENAME     30
+#define KCALL_DUP2       31
+
+typedef uint64_t (*KcallFn)(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4);
+
+static inline uint64_t kcall(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4)
 {
-    uint64_t ret;
-    __asm__ volatile(
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(a1), "S"(a2), "d"(a3), "c"(a4)
-        : "memory", "r8", "r9", "r10", "r11"
-    );
-    return ret;
+    return ((const KcallFn *)KCALL_TABLE_ADDR)[num](a1, a2, a3, a4);
 }

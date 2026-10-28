@@ -1,11 +1,11 @@
 uint64_t uptime_ms(void)
 {
-    return syscall(SYS_UPTIME, 0, 0, 0, 0);
+    return kcall(KCALL_UPTIME, 0, 0, 0, 0);
 }
 
 void yield(void)
 {
-    syscall(SYS_YIELD, 0, 0, 0, 0);
+    kcall(KCALL_YIELD, 0, 0, 0, 0);
 }
 
 static int read_device_text(const char *path, char *buf, size_t size)

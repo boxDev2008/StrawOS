@@ -74,7 +74,7 @@ void kmain(void)
     kprintf("PMM Initialized\n");
 
     filesystems_init();
-    fs_syscalls_init();
+    fs_kcalls_init();
     socket_init();
     inet_init();
 

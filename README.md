@@ -58,7 +58,7 @@ git submodule update --init --recursive
 
 | Path | Contents |
 | --- | --- |
-| `kernel/` | The kernel: CPU setup, memory, scheduler, filesystems, drivers, networking, syscalls |
+| `kernel/` | The kernel: CPU setup, memory, scheduler, filesystems, drivers, networking, kernel call table |
 | `modules/src/` | Userspace programs: StrawX server and shell, apps, Lua shell, NetSurf and Discord frontends |
 | `modules/lib/` | Userspace libraries: libc, StrawX client library, networking/TLS, and third-party submodules |
 | `modules/root/` | Files copied into the OS root filesystem (icons, wallpapers, desktop entries, scripts) |
