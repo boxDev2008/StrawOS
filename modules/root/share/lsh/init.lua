@@ -82,6 +82,20 @@ local function resolve_program(name)
             if st and st.type == "file" and candidate:match("%.elf$") then return candidate end
         end
     end
+    for _, candidate in ipairs({ name .. ".elf", name }) do
+        local st = sys.stat(candidate)
+        if st and st.type == "file" and candidate:match("%.elf$") then return abs(candidate) end
+    end
+end
+
+local raw_spawn, raw_run = sys.spawn, sys.run
+
+function sys.spawn(prog, ...)
+    return raw_spawn(type(prog) == "string" and resolve_program(prog) or prog, ...)
+end
+
+function sys.run(prog, ...)
+    return raw_run(type(prog) == "string" and resolve_program(prog) or prog, ...)
 end
 
 local function list_sorted(path)
