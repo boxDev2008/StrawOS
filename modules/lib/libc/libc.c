@@ -32,7 +32,6 @@
 #include "include/posix_compat/fcntl.h"
 #include "include/posix_compat/sys/select.h"
 #include "include/posix_compat/sys/utsname.h"
-#include "include/posix_compat/sys/mman.h"
 #include "include/posix_compat/arpa/inet.h"
 
 #include "include/kcall.h"

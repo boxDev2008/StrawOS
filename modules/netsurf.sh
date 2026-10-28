@@ -64,6 +64,16 @@ if [ ! -f $GU/hashtable.c ] || [ $U/hashtable.c -nt $GU/hashtable.c ] || [ $U/me
             -e 's/gzgets(fp, s, sizeof s)/fgets(s, sizeof s, fp)/' -e 's/gzclose(/fclose(/' > $GU/hashtable.c
 fi
 
+# copy of the file fetcher that reads files with fopen/malloc instead of mmap, which StrawOS doesn't have
+F=$NS/netsurf/content/fetchers/file
+GF=$GEN/netsurf/content/fetchers/file
+if [ ! -f $GF/file.c ] || [ $F/file.c -nt $GF/file.c ] || [ netsurf.sh -nt $GF/file.c ]; then
+    mkdir -p $GF
+    sed -e 's|^#include "utils/config.h"$|&\n#undef HAVE_MMAP|' \
+        -e 's|^#include "dirlist.h"$|#include "content/fetchers/file/dirlist.h"|' \
+        -e 's|^#include "file.h"$|#include "content/fetchers/file/file.h"|' $F/file.c > $GF/file.c
+fi
+
 BASE="--target=x86_64-unknown-none -O2 -ffreestanding -nostdlibinc -mno-red-zone -fno-math-errno -fpie -std=gnu99 -w
       -D_GNU_SOURCE -DNDEBUG -Ilib/netsurf-port/include -Ilib/libc/include/posix_compat -Ilib/libc/include
       -include lib/netsurf-port/include/nsconfig.h"
@@ -153,7 +163,7 @@ add netsurf "$NS_FLAGS" \
     $(in_dir $C/content/fetchers data.c resource.c) \
     $(in_dir $C/content/fetchers/about about.c blank.c certificate.c chart.c choices.c config.c imagecache.c nscolours.c \
         query.c query_auth.c query_fetcherror.c query_privacy.c query_timeout.c testament.c websearch.c) \
-    $(in_dir $C/content/fetchers/file dirlist.c file.c) \
+    $C/content/fetchers/file/dirlist.c $GF/file.c \
     $(in_dir $C/content/handlers/css css.c dump.c internal.c hints.c select.c) \
     $(in_dir $C/content/handlers/html box_construct.c box_inspect.c box_manipulate.c box_normalise.c box_special.c \
         box_textarea.c css.c css_fetcher.c dom_event.c font.c form.c forms.c html.c imagemap.c interaction.c layout.c \

@@ -84,7 +84,17 @@ compile src/init.c;        INIT=$OUT
 compile src/lsh.c -Ilib/lua; LSH=$OUT
 compile lib/lua/onelua.c -DMAKE_LIB "${POSIX[@]}" -Ilib/lua; LUA=$OUT
 compile src/strawx/main.c; SXMAIN=$OUT
-compile lib/tinycc/tcc.c -DONE_SOURCE=1 "${POSIX[@]}" -Ilib/tinycc-port -w; TCC=$OUT
+TG=obj/tccgen
+if stale $TG/tccrun.c lib/tinycc/tccrun.c lib/tinycc/tcc.c lib/tinycc/libtcc.c build.sh; then
+    mkdir -p $TG
+    cp lib/tinycc/tcc.c lib/tinycc/libtcc.c $TG/
+    awk '/^# include <sys\/mman.h>$/ { next }
+         /VirtualProtect\(ptr/ { win = 1 }
+         win && /^#else$/ { print; print "    (void)ptr; (void)length; (void)mode;"; skip = 1; win = 0; next }
+         skip { if (/^#endif$/) { skip = 0; print } next }
+         { print }' lib/tinycc/tccrun.c > $TG/tccrun.c
+fi
+compile $TG/tcc.c -DONE_SOURCE=1 "${POSIX[@]}" -Ilib/tinycc-port -Ilib/tinycc -w; TCC=$OUT
 compile src/fetch.c "${NET[@]}"; FETCH=$OUT
 
 DISCORD=()
