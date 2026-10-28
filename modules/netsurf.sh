@@ -75,7 +75,7 @@ if [ ! -f $GF/file.c ] || [ $F/file.c -nt $GF/file.c ] || [ netsurf.sh -nt $GF/f
 fi
 
 BASE="--target=x86_64-unknown-none -O2 -ffreestanding -nostdlibinc -mno-red-zone -fno-math-errno -fpie -std=gnu99 -w
-      -D_GNU_SOURCE -DNDEBUG -Ilib/netsurf-port/include -Ilib/libc/include/posix_compat -Ilib/libc/include
+      -D_GNU_SOURCE -DNDEBUG -Ilib/netsurf-port/include -Ilib/libc/include
       -include lib/netsurf-port/include/nsconfig.h"
 
 INC_PU="-I$NS/libparserutils/include"

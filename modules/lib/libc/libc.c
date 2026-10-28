@@ -26,13 +26,12 @@
 #include "include/sys/stat.h"
 #include "include/sys/time.h"
 
-#include "include/posix_compat/unistd.h"
-#include "include/posix_compat/inttypes.h"
-#include "include/posix_compat/signal.h"
-#include "include/posix_compat/fcntl.h"
-#include "include/posix_compat/sys/select.h"
-#include "include/posix_compat/sys/utsname.h"
-#include "include/posix_compat/arpa/inet.h"
+#include "include/inttypes.h"
+#include "include/signal.h"
+#include "include/fcntl.h"
+#include "include/sys/select.h"
+#include "include/sys/utsname.h"
+#include "include/arpa/inet.h"
 
 #include "include/kcall.h"
 

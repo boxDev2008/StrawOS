@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../../libc/include/posix_compat/sys/socket.h"
+#include "../../../libc/include/sys/socket.h"
 
 #define socket ns_posix_socket
 

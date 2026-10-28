@@ -7,7 +7,7 @@ OBJ=obj/tcc
 SYSROOT=obj/tcc-sysroot
 
 CFLAGS="--target=x86_64-unknown-none -O2 -ffreestanding -nostdlibinc -mno-red-zone -fno-math-errno -fpie -w
-        -Ilib/libc/include/posix_compat -Ilib/libc/include"
+        -Ilib/libc/include"
 
 STAMP=$OBJ/sysroot.stamp
 if [ -f $STAMP ] && [ -z "$(find tcc.sh crt0.c lib/libc $TCC/include $TCC/lib -newer $STAMP -print -quit)" ]; then
@@ -21,7 +21,7 @@ mkdir -p $OBJ $SYSROOT/usr/include $SYSROOT/usr/lib/tcc/include
 # skipping the ones libc already provides so the types stay consistent with libc.a
 cp -r lib/libc/include/. $SYSROOT/usr/include/
 for h in $TCC/include/*.h; do
-    [ -f lib/libc/include/$(basename $h) ] || [ -f lib/libc/include/posix_compat/$(basename $h) ] || cp $h $SYSROOT/usr/lib/tcc/include/
+    [ -f lib/libc/include/$(basename $h) ] || cp $h $SYSROOT/usr/lib/tcc/include/
 done
 
 # startup files: tcc links crt1.o crti.o ... crtn.o around every executable

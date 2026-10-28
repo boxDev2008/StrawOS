@@ -6,8 +6,6 @@ CFLAGS=(--target=x86_64-unknown-none -O2 -ffreestanding -mno-red-zone -fno-math-
         -Ilib/libc/include -Ilib/strawx -Ilib/stb)
 LDFLAGS=(--target=x86_64-unknown-none -nostdlib -static -fpie -Wl,-pie -Wl,-no-dynamic-linker)
 NET=(-Ilib/bearssl/inc -Ilib/net)
-# ported code gets the POSIX layer; it must come before the native headers
-POSIX=(-Ilib/libc/include/posix_compat)
 OBJ=obj/build
 
 mkdir -p bin $OBJ obj/bearssl
@@ -56,7 +54,7 @@ link() {
     fi
 }
 
-BEARSSL_CFLAGS="--target=x86_64-unknown-none -O2 -ffreestanding -mno-red-zone -fno-math-errno -fpie -Ilib/libc/include/posix_compat -Ilib/libc/include -Ilib/bearssl/inc -Ilib/bearssl/src"
+BEARSSL_CFLAGS="--target=x86_64-unknown-none -O2 -ffreestanding -mno-red-zone -fno-math-errno -fpie -Ilib/libc/include -Ilib/bearssl/inc -Ilib/bearssl/src"
 bearssl_stale=$(for src in lib/bearssl/src/*.c lib/bearssl/src/*/*.c; do
     obj=obj/bearssl/$(echo "${src#lib/bearssl/src/}" | tr / _).o
     if [ ! -f "$obj" ] || [ "$src" -nt "$obj" ]; then echo "$src $obj"; fi
@@ -82,7 +80,7 @@ BASE=($CRT0 $LIBC)
 
 compile src/init.c;        INIT=$OUT
 compile src/lsh.c -Ilib/lua; LSH=$OUT
-compile lib/lua/onelua.c -DMAKE_LIB "${POSIX[@]}" -Ilib/lua; LUA=$OUT
+compile lib/lua/onelua.c -DMAKE_LIB -Ilib/lua; LUA=$OUT
 compile src/strawx/main.c; SXMAIN=$OUT
 TG=obj/tccgen
 if stale $TG/tccrun.c lib/tinycc/tccrun.c lib/tinycc/tcc.c lib/tinycc/libtcc.c build.sh; then
@@ -94,7 +92,7 @@ if stale $TG/tccrun.c lib/tinycc/tccrun.c lib/tinycc/tcc.c lib/tinycc/libtcc.c b
          skip { if (/^#endif$/) { skip = 0; print } next }
          { print }' lib/tinycc/tccrun.c > $TG/tccrun.c
 fi
-compile $TG/tcc.c -DONE_SOURCE=1 "${POSIX[@]}" -Ilib/tinycc-port -Ilib/tinycc -w; TCC=$OUT
+compile $TG/tcc.c -DONE_SOURCE=1 -Ilib/tinycc-port -Ilib/tinycc -w; TCC=$OUT
 compile src/fetch.c "${NET[@]}"; FETCH=$OUT
 
 DISCORD=()
