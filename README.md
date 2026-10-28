@@ -40,8 +40,8 @@
 ### Steps
 
 ```sh
-git clone --recursive https://github.com/boxDev2008/StrawOSModern.git
-cd StrawOSModern
+git clone --recursive https://github.com/boxDev2008/StrawOS.git
+cd StrawOS
 ./build.sh   # produces strawos-x86_64.iso
 ./run.sh     # boots it in QEMU
 ```
