@@ -14,6 +14,8 @@
 
 #define TOOLBAR_H    48
 #define PROMPT_H     44
+#define SEARCH_H     44
+#define SEARCH_DEPTH 16
 #define STATUS_H     26
 #define SIDEBAR_W    170
 #define HEADER_H     28
@@ -30,6 +32,7 @@
 typedef struct
 {
     char           name[NAME_MAX];
+    char           dir[PATH_MAX_LEN];
     enum stat_type type;
     uint64_t       size;
     SxImage       *icon;
@@ -50,6 +53,7 @@ typedef enum
 {
     ACT_NONE,
     ACT_OPEN,
+    ACT_OPEN_LOCATION,
     ACT_EDIT,
     ACT_CUT,
     ACT_COPY,
@@ -86,6 +90,8 @@ typedef enum
     HIT_NONE,
     HIT_BACK,
     HIT_UP,
+    HIT_SEARCH,
+    HIT_SEARCH_CLOSE,
     HIT_NEW_FOLDER,
     HIT_DELETE,
     HIT_PLACE,
@@ -145,6 +151,10 @@ static struct
     char  input[NAME_MAX];
     bool  input_fresh;
 
+    bool  searching;
+    char  query[NAME_MAX];
+    bool  search_truncated;
+
     char  status[160];
     bool  status_error;
 
@@ -175,16 +185,30 @@ F;
 static int width(void)  { return sx_window_width(F.win); }
 static int height(void) { return sx_window_height(F.win); }
 
+static int search_h(void) { return F.searching ? SEARCH_H : 0; }
+static int prompt_y(void) { return TOOLBAR_H + search_h(); }
 static int prompt_h(void) { return F.prompt == PROMPT_NONE ? 0 : PROMPT_H; }
+static int content_y(void) { return prompt_y() + prompt_h(); }
 
 static SxRect back_rect(void)       { return sx_rect(12, 9, 32, 30); }
 static SxRect up_rect(void)         { return sx_rect(48, 9, 32, 30); }
 static SxRect delete_rect(void)     { return sx_rect(width() - 12 - 76, 9, 76, 30); }
 static SxRect new_folder_rect(void) { return sx_rect(delete_rect().x - 8 - 106, 9, 106, 30); }
+static SxRect search_rect(void)     { return sx_rect(new_folder_rect().x - 8 - 32, 9, 32, 30); }
+
+static SxRect search_field_rect(void)
+{
+    return sx_rect(SIDEBAR_W + 12, TOOLBAR_H + 7, width() - SIDEBAR_W - 12 - 12 - 84 - 8, 30);
+}
+
+static SxRect search_close_rect(void)
+{
+    return sx_rect(width() - 12 - 84, TOOLBAR_H + 7, 84, 30);
+}
 
 static SxRect sidebar_rect(void)
 {
-    int top = TOOLBAR_H + prompt_h();
+    int top = content_y();
     return sx_rect(0, top, SIDEBAR_W, height() - top - STATUS_H);
 }
 
@@ -196,7 +220,7 @@ static SxRect place_rect(int i)
 
 static SxRect list_rect(void)
 {
-    int top = TOOLBAR_H + prompt_h();
+    int top = content_y();
     return sx_rect(SIDEBAR_W, top, width() - SIDEBAR_W, height() - top - STATUS_H);
 }
 
@@ -214,17 +238,17 @@ static int visible_rows(void)
 
 static SxRect prompt_field_rect(void)
 {
-    return sx_rect(SIDEBAR_W + 12 + 150, TOOLBAR_H + 7, width() - SIDEBAR_W - 12 - 150 - 200, 30);
+    return sx_rect(SIDEBAR_W + 12 + 150, prompt_y() + 7, width() - SIDEBAR_W - 12 - 150 - 200, 30);
 }
 
 static SxRect prompt_ok_rect(void)
 {
-    return sx_rect(width() - 12 - 84 - 8 - 84, TOOLBAR_H + 7, 84, 30);
+    return sx_rect(width() - 12 - 84 - 8 - 84, prompt_y() + 7, 84, 30);
 }
 
 static SxRect prompt_cancel_rect(void)
 {
-    return sx_rect(width() - 12 - 84, TOOLBAR_H + 7, 84, 30);
+    return sx_rect(width() - 12 - 84, prompt_y() + 7, 84, 30);
 }
 
 static void set_status(const char *msg, bool error)
@@ -358,6 +382,121 @@ static void clamp_scroll(void)
         F.scroll = 0;
 }
 
+static void entry_path(char *out, const Entry *e)
+{
+    join_path(out, e->dir, e->name);
+}
+
+static void clear_entries(void)
+{
+    for (int i = 0; i < F.count; i++)
+        sx_image_free(F.entries[i].icon);
+    F.count = 0;
+}
+
+static void add_entry(const char *dir, const struct dirent *de)
+{
+    Entry *e = &F.entries[F.count++];
+    memcpy(e->name, de->name, NAME_MAX);
+    e->name[NAME_MAX - 1] = '\0';
+    strncpy(e->dir, dir, PATH_MAX_LEN - 1);
+    e->dir[PATH_MAX_LEN - 1] = '\0';
+    e->type = de->type;
+    e->size = 0;
+    e->icon = NULL;
+
+    char full[PATH_MAX_LEN];
+    entry_path(full, e);
+    struct stat st;
+    if (stat(full, &st) == 0)
+    {
+        e->type = st.type;
+        e->size = st.size;
+    }
+
+    SxDesktopEntry de_entry;
+    if (e->type == STAT_FILE && sx_is_desktop_file(e->name) && sx_desktop_entry_load(full, &de_entry) &&
+        de_entry.icon[0])
+    {
+        SxImage *img = sx_image_load(de_entry.icon);
+        if (img)
+        {
+            e->icon = sx_image_scale(img, ICON_SIZE, ICON_SIZE);
+            sx_image_free(img);
+        }
+    }
+}
+
+static void finish_listing(const char *select_name)
+{
+    sort_entries();
+
+    F.selected = F.count > 0 ? 0 : -1;
+    if (select_name)
+        for (int i = 0; i < F.count; i++)
+            if (strcmp(F.entries[i].name, select_name) == 0)
+                F.selected = i;
+    F.scroll = 0;
+    ensure_visible();
+    clamp_scroll();
+}
+
+static bool name_matches(const char *name, const char *query)
+{
+    size_t qn = strlen(query);
+    for (; *name; name++)
+    {
+        size_t i = 0;
+        while (i < qn && name[i] && tolower((unsigned char)name[i]) == tolower((unsigned char)query[i]))
+            i++;
+        if (i == qn)
+            return true;
+    }
+    return qn == 0;
+}
+
+static void search_dir(const char *path, int depth)
+{
+    if (depth > SEARCH_DEPTH)
+        return;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return;
+
+    struct dirent de;
+    while (readdir(fd, &de) == 1)
+    {
+        char child[PATH_MAX_LEN];
+        join_path(child, path, de.name);
+
+        if (name_matches(de.name, F.query))
+        {
+            if (F.count >= MAX_ENTRIES)
+            {
+                F.search_truncated = true;
+                break;
+            }
+            add_entry(path, &de);
+        }
+
+        struct stat st;
+        if (stat(child, &st) == 0 && st.type == STAT_DIR)
+            search_dir(child, depth + 1);
+        if (F.search_truncated)
+            break;
+    }
+    close(fd);
+}
+
+static void run_search(const char *select_name)
+{
+    clear_entries();
+    F.search_truncated = false;
+    if (F.query[0])
+        search_dir(F.cwd, 0);
+    finish_listing(select_name);
+}
+
 static bool load_dir(const char *path, const char *select_name)
 {
     int fd = open(path, O_RDONLY);
@@ -369,55 +508,17 @@ static bool load_dir(const char *path, const char *select_name)
         return false;
     }
 
+    F.searching = false;
     strncpy(F.cwd, path, PATH_MAX_LEN - 1);
     F.cwd[PATH_MAX_LEN - 1] = '\0';
-    for (int i = 0; i < F.count; i++)
-        sx_image_free(F.entries[i].icon);
-    F.count = 0;
+    clear_entries();
 
     struct dirent de;
     while (F.count < MAX_ENTRIES && readdir(fd, &de) == 1)
-    {
-        Entry *e = &F.entries[F.count++];
-        memcpy(e->name, de.name, NAME_MAX);
-        e->name[NAME_MAX - 1] = '\0';
-        e->type = de.type;
-        e->size = 0;
-        e->icon = NULL;
-
-        char full[PATH_MAX_LEN];
-        join_path(full, F.cwd, e->name);
-        struct stat st;
-        if (stat(full, &st) == 0)
-        {
-            e->type = st.type;
-            e->size = st.size;
-        }
-
-        SxDesktopEntry de_entry;
-        if (e->type == STAT_FILE && sx_is_desktop_file(e->name) && sx_desktop_entry_load(full, &de_entry) &&
-            de_entry.icon[0])
-        {
-            SxImage *img = sx_image_load(de_entry.icon);
-            if (img)
-            {
-                e->icon = sx_image_scale(img, ICON_SIZE, ICON_SIZE);
-                sx_image_free(img);
-            }
-        }
-    }
+        add_entry(F.cwd, &de);
     close(fd);
 
-    sort_entries();
-
-    F.selected = F.count > 0 ? 0 : -1;
-    if (select_name)
-        for (int i = 0; i < F.count; i++)
-            if (strcmp(F.entries[i].name, select_name) == 0)
-                F.selected = i;
-    F.scroll = 0;
-    ensure_visible();
-    clamp_scroll();
+    finish_listing(select_name);
 
     char title[PATH_MAX_LEN + 16];
     const char *base = strrchr(F.cwd, '/');
@@ -435,18 +536,56 @@ static void refresh(void)
     if (F.selected >= 0 && F.selected < F.count)
         strcpy(keep, F.entries[F.selected].name);
     int scroll = F.scroll;
-    char path[PATH_MAX_LEN];
-    strcpy(path, F.cwd);
-    load_dir(path, keep[0] ? keep : NULL);
+    if (F.searching)
+    {
+        run_search(keep[0] ? keep : NULL);
+    }
+    else
+    {
+        char path[PATH_MAX_LEN];
+        strcpy(path, F.cwd);
+        load_dir(path, keep[0] ? keep : NULL);
+    }
     F.scroll = scroll;
     ensure_visible();
     clamp_scroll();
 }
 
+static void reload(const char *select_name)
+{
+    if (F.searching)
+        run_search(select_name);
+    else
+        load_dir(F.cwd, select_name);
+}
+
+static void start_search(void)
+{
+    if (F.searching)
+        return;
+    F.searching = true;
+    F.query[0] = '\0';
+    F.prompt = PROMPT_NONE;
+    run_search(NULL);
+}
+
+static void end_search(void)
+{
+    if (!F.searching)
+        return;
+    char path[PATH_MAX_LEN];
+    strcpy(path, F.cwd);
+    load_dir(path, NULL);
+}
+
 static void navigate(const char *path, const char *select_name)
 {
     if (strcmp(path, F.cwd) == 0)
+    {
+        if (F.searching)
+            load_dir(path, select_name);
         return;
+    }
 
     char old[PATH_MAX_LEN];
     strcpy(old, F.cwd);
@@ -495,7 +634,7 @@ static void open_entry(int index)
 
     Entry *e = &F.entries[index];
     char full[PATH_MAX_LEN];
-    join_path(full, F.cwd, e->name);
+    entry_path(full, e);
 
     char msg[300];
     switch (e->type)
@@ -711,7 +850,7 @@ static void clip_set(bool cut)
 {
     if (!has_selection())
         return;
-    join_path(F.clip_path, F.cwd, F.entries[F.selected].name);
+    entry_path(F.clip_path, &F.entries[F.selected]);
     F.clip_cut = cut;
 
     char msg[300];
@@ -756,7 +895,7 @@ static void paste(void)
         ok = copy_path(F.clip_path, dst, 0);
     }
 
-    load_dir(F.cwd, name);
+    reload(name);
     snprintf(msg, sizeof(msg), ok ? "Pasted %s" : "Couldn't paste %s", name);
     set_status(msg, !ok);
 }
@@ -784,7 +923,7 @@ static void confirm_prompt(void)
         }
         F.prompt = PROMPT_NONE;
         strcpy(name, F.input);
-        load_dir(F.cwd, name);
+        reload(name);
         snprintf(msg, sizeof(msg), "Created %s", name);
         set_status(msg, false);
     }
@@ -799,8 +938,8 @@ static void confirm_prompt(void)
             return;
         }
         char from[PATH_MAX_LEN];
-        join_path(from, F.cwd, e->name);
-        join_path(full, F.cwd, F.input);
+        entry_path(from, e);
+        join_path(full, e->dir, F.input);
         if (path_exists(full))
         {
             set_status("Something with that name already exists", true);
@@ -813,14 +952,14 @@ static void confirm_prompt(void)
         }
         F.prompt = PROMPT_NONE;
         strcpy(name, F.input);
-        load_dir(F.cwd, name);
+        reload(name);
         snprintf(msg, sizeof(msg), "Renamed to %s", name);
         set_status(msg, false);
     }
     else if (F.prompt == PROMPT_DELETE)
     {
         Entry *e = &F.entries[F.selected];
-        join_path(full, F.cwd, e->name);
+        entry_path(full, e);
         F.prompt = PROMPT_NONE;
         if (unlink(full) != 0)
         {
@@ -831,7 +970,7 @@ static void confirm_prompt(void)
         }
         snprintf(msg, sizeof(msg), "Deleted %s", e->name);
         int keep = F.selected;
-        load_dir(F.cwd, NULL);
+        reload(NULL);
         F.selected = keep < F.count ? keep : F.count - 1;
         ensure_visible();
         clamp_scroll();
@@ -844,7 +983,7 @@ static void open_in_notes(int index)
     if (index < 0 || index >= F.count)
         return;
     char full[PATH_MAX_LEN], msg[300];
-    join_path(full, F.cwd, F.entries[index].name);
+    entry_path(full, &F.entries[index]);
     const char *argv[] = { NOTES_PATH, full, NULL };
     snprintf(msg, sizeof(msg), spawn(NOTES_PATH, argv) ? "Opened %s in Notes" : "Couldn't open %s",
              F.entries[index].name);
@@ -855,7 +994,7 @@ static void open_in_terminal(int index)
 {
     char dir[PATH_MAX_LEN], msg[300];
     if (index >= 0 && index < F.count && F.entries[index].type == STAT_DIR)
-        join_path(dir, F.cwd, F.entries[index].name);
+        entry_path(dir, &F.entries[index]);
     else
         strcpy(dir, F.cwd);
     const char *argv[] = { TERMINAL_PATH, "--cwd", dir, NULL };
@@ -869,7 +1008,7 @@ static void set_wallpaper(int index)
     if (index < 0 || index >= F.count)
         return;
     char full[PATH_MAX_LEN], msg[300];
-    join_path(full, F.cwd, F.entries[index].name);
+    entry_path(full, &F.entries[index]);
     if (sx_setting_set("wallpaper", full))
     {
         sx_settings_apply();
@@ -936,10 +1075,10 @@ static void open_properties(int index)
     F.props_icon = NULL;
 
     char full[PATH_MAX_LEN], buf[160], size[32];
-    join_path(full, F.cwd, e->name);
+    entry_path(full, e);
 
     props_add("Type", type_label(e));
-    props_add("Location", F.cwd);
+    props_add("Location", e->dir);
 
     if (e->type == STAT_DIR)
     {
@@ -1108,6 +1247,12 @@ static void draw_nav_button(SxCanvas *c, SxRect r, HitKind kind, bool enabled)
     }
 }
 
+static void draw_search_icon(SxCanvas *c, float cx, float cy, uint32_t col)
+{
+    sx_draw_circle(c, cx - 1.5f, cy - 1.5f, 5.0f, 1.6f, col);
+    sx_draw_line(c, cx + 2.2f, cy + 2.2f, cx + 6.0f, cy + 6.0f, 1.8f, col);
+}
+
 static int ellipsize(const SxFont *font, const char *text, int max_w, char *out, int out_size)
 {
     int len = (int)strlen(text);
@@ -1210,7 +1355,52 @@ static void draw_toolbar(SxCanvas *c)
                  can_delete ? SX_RGB(0x4A, 0x2A, 0x2E) : SX_THEME_SURFACE_HI,
                  can_delete ? SX_RGB(0xFF, 0x9A, 0x9C) : SX_THEME_DISABLED);
 
-    draw_breadcrumbs(c, up_rect().x + up_rect().w + 14, new_folder_rect().x - 12);
+    SxRect sr = search_rect();
+    sx_ui_button(c, sr, "", &sx_font_sans, button_state(HIT_SEARCH, 0),
+                 F.searching ? SX_THEME_ACCENT_A(60) : SX_THEME_SURFACE_HI, SX_THEME_TEXT);
+    draw_search_icon(c, sr.x + sr.w * 0.5f, sr.y + sr.h * 0.5f, SX_THEME_TEXT);
+
+    draw_breadcrumbs(c, up_rect().x + up_rect().w + 14, sr.x - 12);
+}
+
+static void draw_search_bar(SxCanvas *c)
+{
+    if (!F.searching)
+        return;
+
+    int w = c->width;
+    SxRect bar = sx_rect(0, TOOLBAR_H, w, SEARCH_H);
+    sx_fill_rect(c, bar.x, bar.y, bar.w, bar.h, SX_THEME_SURFACE);
+    sx_fill_rect(c, 0, bar.y + bar.h - 1, w, 1, SX_RGBA(0, 0, 0, 90));
+
+    const SxFont *font = &sx_font_sans;
+    SxRect field = search_field_rect();
+    bool focused = F.prompt == PROMPT_NONE;
+    sx_fill_rounded_rect(c, field.x, field.y, field.w, field.h, 7, SX_THEME_SUNKEN);
+    sx_draw_rounded_rect(c, field.x, field.y, field.w, field.h, 7,
+                         focused ? SX_THEME_ACCENT : SX_RGBA(255, 255, 255, 26));
+    draw_search_icon(c, field.x + 16, field.y + field.h * 0.5f, SX_THEME_TEXT_DIM);
+
+    SxRect old = c->clip;
+    sx_canvas_set_clip(c, sx_rect_intersect(old, sx_rect(field.x + 30, field.y, field.w - 34, field.h)));
+    int tx = field.x + 32, ty = sx_text_y_centered(font, field);
+    int tw = 0;
+    if (F.query[0])
+    {
+        tw = sx_draw_text(c, font, tx, ty, F.query, SX_THEME_TEXT);
+    }
+    else
+    {
+        char hint[PATH_MAX_LEN + 16];
+        snprintf(hint, sizeof(hint), "Search in %s", strcmp(F.cwd, "/") == 0 ? "Root" : base_name(F.cwd));
+        sx_draw_text(c, font, tx, ty, hint, SX_THEME_TEXT_DIM);
+    }
+    if (focused)
+        sx_fill_rect(c, tx + 1 + tw, field.y + 7, 2, field.h - 14, SX_THEME_ACCENT);
+    c->clip = old;
+
+    sx_ui_button(c, search_close_rect(), "Close", &sx_font_sans, button_state(HIT_SEARCH_CLOSE, 0),
+                 SX_THEME_SURFACE_HI, SX_THEME_TEXT);
 }
 
 static void draw_prompt(SxCanvas *c)
@@ -1219,7 +1409,7 @@ static void draw_prompt(SxCanvas *c)
         return;
 
     int w = c->width;
-    SxRect bar = sx_rect(0, TOOLBAR_H, w, PROMPT_H);
+    SxRect bar = sx_rect(0, prompt_y(), w, PROMPT_H);
     sx_fill_rect(c, bar.x, bar.y, bar.w, bar.h, SX_RGB(0x2A, 0x26, 0x1C));
     sx_fill_rect(c, 0, bar.y + bar.h - 1, w, 1, SX_RGBA(0, 0, 0, 90));
 
@@ -1299,7 +1489,7 @@ static void draw_list(SxCanvas *c)
     const SxFont *small = &sx_font_sans_small;
     int right = l.x + l.w - 16 - SCROLLBAR_W;
     int size_x = right - SIZE_COL_W;
-    int type_x = size_x - TYPE_COL_W;
+    int type_x = size_x - (F.searching ? TYPE_COL_W + 90 : TYPE_COL_W);
     int name_x = l.x + 44;
 
     SxRect head = sx_rect(l.x, l.y, l.w, HEADER_H);
@@ -1307,7 +1497,7 @@ static void draw_list(SxCanvas *c)
     sx_fill_rect(c, head.x, head.y + head.h - 1, head.w, 1, SX_RGBA(0, 0, 0, 80));
     int hy = sx_text_y_centered(small, head);
     sx_draw_text(c, small, name_x, hy, "Name", SX_THEME_TEXT_DIM);
-    sx_draw_text(c, small, type_x, hy, "Type", SX_THEME_TEXT_DIM);
+    sx_draw_text(c, small, type_x, hy, F.searching ? "Location" : "Type", SX_THEME_TEXT_DIM);
     sx_draw_text(c, small, right - sx_text_width(small, "Size"), hy, "Size", SX_THEME_TEXT_DIM);
 
     SxRect rows = rows_rect();
@@ -1315,7 +1505,12 @@ static void draw_list(SxCanvas *c)
     sx_canvas_set_clip(c, sx_rect_intersect(old, rows));
 
     if (F.count == 0)
-        sx_draw_text_centered(c, font, sx_rect(rows.x, rows.y, rows.w, 80), "This folder is empty", SX_THEME_TEXT_DIM);
+    {
+        const char *empty = !F.searching ? "This folder is empty"
+                          : F.query[0]   ? "No matching files"
+                                         : "Type to search this folder and its subfolders";
+        sx_draw_text_centered(c, font, sx_rect(rows.x, rows.y, rows.w, 80), empty, SX_THEME_TEXT_DIM);
+    }
 
     for (int i = F.scroll; i < F.count && i < F.scroll + visible_rows() + 1; i++)
     {
@@ -1332,7 +1527,16 @@ static void draw_list(SxCanvas *c)
         char name[NAME_MAX + 4];
         ellipsize(font, e->name, type_x - name_x - 12, name, sizeof(name));
         sx_draw_text(c, font, name_x, sx_text_y_centered(font, r), name, SX_THEME_TEXT);
-        sx_draw_text(c, small, type_x, sx_text_y_centered(small, r), type_label(e), SX_THEME_TEXT_DIM);
+        if (F.searching)
+        {
+            char loc[PATH_MAX_LEN + 4];
+            ellipsize(small, e->dir, size_x - type_x - 12, loc, sizeof(loc));
+            sx_draw_text(c, small, type_x, sx_text_y_centered(small, r), loc, SX_THEME_TEXT_DIM);
+        }
+        else
+        {
+            sx_draw_text(c, small, type_x, sx_text_y_centered(small, r), type_label(e), SX_THEME_TEXT_DIM);
+        }
 
         if (e->type == STAT_FILE)
         {
@@ -1372,8 +1576,13 @@ static void draw_status(SxCanvas *c)
     for (int i = 0; i < F.count; i++)
         if (F.entries[i].type == STAT_DIR)
             folders++;
-    snprintf(left, sizeof(left), "%d item%s  |  %d folder%s, %d file%s", F.count, F.count == 1 ? "" : "s",
-             folders, folders == 1 ? "" : "s", F.count - folders, F.count - folders == 1 ? "" : "s");
+    if (F.searching)
+        snprintf(left, sizeof(left), "%s%d result%s  |  %d folder%s, %d file%s", F.search_truncated ? "First " : "",
+                 F.count, F.count == 1 ? "" : "s", folders, folders == 1 ? "" : "s", F.count - folders,
+                 F.count - folders == 1 ? "" : "s");
+    else
+        snprintf(left, sizeof(left), "%d item%s  |  %d folder%s, %d file%s", F.count, F.count == 1 ? "" : "s",
+                 folders, folders == 1 ? "" : "s", F.count - folders, F.count - folders == 1 ? "" : "s");
     sx_draw_text(c, small, 12, sx_text_y_centered(small, bar), left, SX_THEME_TEXT_DIM);
 
     if (F.status[0])
@@ -1426,6 +1635,8 @@ static void open_menu(int x, int y, int target)
 
         menu_add(e->type == STAT_DIR ? "Open" : (ext_is(e->name, "elf") || ext_is(e->name, "lua") || sx_is_desktop_file(e->name) ? "Run" : "Open"),
                  "Enter", ACT_OPEN, e->type != STAT_DEVICE && e->type != STAT_SOCKET);
+        if (F.searching)
+            menu_add("Open Location", "", ACT_OPEN_LOCATION, true);
         if (file)
             menu_add("Edit in Notes", "", ACT_EDIT, true);
         if (file && sx_image_is_supported(e->name))
@@ -1472,6 +1683,12 @@ static void run_action(Action action, int target)
     switch (action)
     {
         case ACT_OPEN:       open_entry(target); break;
+        case ACT_OPEN_LOCATION:
+        {
+            Entry e = F.entries[target];
+            navigate(e.dir, e.name);
+            break;
+        }
         case ACT_EDIT:       open_in_notes(target); break;
         case ACT_CUT:        clip_set(true); break;
         case ACT_COPY:       clip_set(false); break;
@@ -1588,6 +1805,7 @@ static void draw(void)
     draw_list(c);
     draw_sidebar(c);
     draw_toolbar(c);
+    draw_search_bar(c);
     draw_prompt(c);
     draw_status(c);
     draw_menu(c);
@@ -1622,6 +1840,8 @@ static Hit hit_test(int x, int y)
 
     if (sx_rect_contains(back_rect(), x, y))        { h.kind = HIT_BACK; return h; }
     if (sx_rect_contains(up_rect(), x, y))          { h.kind = HIT_UP; return h; }
+    if (sx_rect_contains(search_rect(), x, y))      { h.kind = HIT_SEARCH; return h; }
+    if (F.searching && sx_rect_contains(search_close_rect(), x, y)) { h.kind = HIT_SEARCH_CLOSE; return h; }
     if (sx_rect_contains(new_folder_rect(), x, y))  { h.kind = HIT_NEW_FOLDER; return h; }
     if (sx_rect_contains(delete_rect(), x, y))      { h.kind = HIT_DELETE; return h; }
 
@@ -1686,7 +1906,9 @@ static void activate(Hit h)
     {
         case HIT_BACK:          go_back(); break;
         case HIT_UP:            go_up(); break;
-        case HIT_NEW_FOLDER:    start_prompt(PROMPT_NEW_FOLDER); break;
+        case HIT_SEARCH:        F.searching ? end_search() : start_search(); break;
+        case HIT_SEARCH_CLOSE:  end_search(); break;
+        case HIT_NEW_FOLDER:   start_prompt(PROMPT_NEW_FOLDER); break;
         case HIT_DELETE:        start_prompt(PROMPT_DELETE); break;
         case HIT_PROMPT_OK:     confirm_prompt(); break;
         case HIT_PROMPT_CANCEL: F.prompt = PROMPT_NONE; break;
@@ -1748,6 +1970,42 @@ static void handle_prompt_key(const SxEvent *ev)
     }
 }
 
+static bool handle_search_key(const SxEvent *ev)
+{
+    bool printable = ev->ch >= 32 && ev->ch < 127;
+    if (!F.searching)
+    {
+        if (!printable || ev->ch == ' ')
+            return false;
+        start_search();
+    }
+
+    if (ev->key == SX_KEY_ESCAPE)
+    {
+        end_search();
+        return true;
+    }
+
+    size_t len = strlen(F.query);
+    if (ev->key == SX_KEY_BACKSPACE)
+    {
+        if (len > 0)
+            F.query[len - 1] = '\0';
+    }
+    else if (printable && len < NAME_MAX - 1)
+    {
+        F.query[len] = (char)ev->ch;
+        F.query[len + 1] = '\0';
+    }
+    else
+    {
+        return false;
+    }
+
+    run_search(NULL);
+    return true;
+}
+
 static void handle_key(const SxEvent *ev)
 {
     if (F.props_open)
@@ -1772,6 +2030,9 @@ static void handle_key(const SxEvent *ev)
 
     bool ctrl = ev->mods & SX_MOD_CTRL;
     bool alt = ev->mods & SX_MOD_ALT;
+
+    if (!ctrl && !alt && handle_search_key(ev))
+        return;
 
     switch (ev->key)
     {
@@ -1827,7 +2088,9 @@ static void handle_key(const SxEvent *ev)
             refresh();
             break;
         default:
-            if (ctrl && ev->key == 'n')
+            if (ctrl && ev->key == 'f')
+                start_search();
+            else if (ctrl && ev->key == 'n')
                 start_prompt(ev->mods & SX_MOD_SHIFT ? PROMPT_NEW_FOLDER : PROMPT_NEW_FILE);
             else if (ctrl && ev->key == 'r')
                 refresh();
