@@ -4,6 +4,7 @@ static void scheduler_timer_irq(void)
     {
         xhci_poll();
         nic_poll();
+        net_loopback_poll();
         inet_tick();
     }
     task_scheduler_tick();

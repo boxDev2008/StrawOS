@@ -360,8 +360,65 @@ static void ipv4_send_from(Ipv4Addr src, Ipv4Addr dst, const uint8_t *dst_mac, u
     eth_send(dst_mac, ETHERTYPE_IPV4, buf, total_len);
 }
 
+#define LOOPBACK_QUEUE 64
+
+typedef struct
+{
+    Ipv4Addr addr;
+    uint8_t  protocol;
+    uint16_t len;
+    uint8_t  data[1500];
+}
+LoopbackPacket;
+
+static LoopbackPacket loopback_queue[LOOPBACK_QUEUE];
+static int            loopback_head;
+static int            loopback_count;
+
+static int ipv4_is_local(Ipv4Addr ip)
+{
+    return ip.bytes[0] == 127 || (net_up && ipv4_equal(ip, our_ip));
+}
+
+static void loopback_send(Ipv4Addr dst, uint8_t protocol, const void *payload, uint16_t payload_len)
+{
+    uint64_t flags = irq_save();
+    if (loopback_count < LOOPBACK_QUEUE && payload_len <= sizeof(loopback_queue[0].data))
+    {
+        LoopbackPacket *p = &loopback_queue[(loopback_head + loopback_count) % LOOPBACK_QUEUE];
+        p->addr = dst;
+        p->protocol = protocol;
+        p->len = payload_len;
+        memcpy(p->data, payload, payload_len);
+        loopback_count++;
+    }
+    irq_restore(flags);
+}
+
+static void ipv4_dispatch(Ipv4Addr src_ip, uint8_t protocol, const uint8_t *payload, uint16_t len);
+
+void net_loopback_poll(void)
+{
+    uint64_t flags = irq_save();
+    for (int n = loopback_count; n > 0; n--)
+    {
+        static LoopbackPacket p;
+        p = loopback_queue[loopback_head];
+        loopback_head = (loopback_head + 1) % LOOPBACK_QUEUE;
+        loopback_count--;
+        ipv4_dispatch(p.addr, p.protocol, p.data, p.len);
+    }
+    irq_restore(flags);
+}
+
 void ipv4_send(Ipv4Addr dst, uint8_t protocol, const void *payload, uint16_t payload_len)
 {
+    if (ipv4_is_local(dst))
+    {
+        loopback_send(dst, protocol, payload, payload_len);
+        return;
+    }
+
     Ipv4Addr next_hop = ipv4_same_subnet(dst, our_ip, netmask) ? dst : gateway_ip;
 
     uint8_t dst_mac[6];
@@ -471,12 +528,18 @@ static void ipv4_handle_packet(const uint8_t *data, uint16_t len)
         total_len = len;
     uint16_t payload_len = (uint16_t)(total_len - header_len);
 
-    if (ip->protocol == IPV4_PROTO_ICMP && have_ip)
-        icmp_handle_packet(src_ip, data + header_len, payload_len);
-    else if (ip->protocol == IPV4_PROTO_UDP)
-        udp_handle_packet(src_ip, data + header_len, payload_len);
-    else if (ip->protocol == IPV4_PROTO_TCP && have_ip)
-        inet_tcp_deliver(src_ip, data + header_len, payload_len);
+    if (have_ip || ip->protocol == IPV4_PROTO_UDP)
+        ipv4_dispatch(src_ip, ip->protocol, data + header_len, payload_len);
+}
+
+static void ipv4_dispatch(Ipv4Addr src_ip, uint8_t protocol, const uint8_t *payload, uint16_t len)
+{
+    if (protocol == IPV4_PROTO_ICMP)
+        icmp_handle_packet(src_ip, payload, len);
+    else if (protocol == IPV4_PROTO_UDP)
+        udp_handle_packet(src_ip, payload, len);
+    else if (protocol == IPV4_PROTO_TCP)
+        inet_tcp_deliver(src_ip, payload, len);
 }
 
 static void net_handle_frame(const uint8_t *frame, uint16_t len)

@@ -292,6 +292,9 @@ static Socket *sock_find_listener(const char *name)
 
 int64_t sock_sys_bind(int fd, const char *name)
 {
+    if (fd_valid(fd) && inet_is_socket(&fd_table[fd].file))
+        return inet_bind(&fd_table[fd].file, name);
+
     Socket *s = sock_from_fd(fd);
     if (!s || !name)
         return -EBADF;
@@ -323,6 +326,9 @@ int64_t sock_sys_bind(int fd, const char *name)
 
 int64_t sock_sys_listen(int fd)
 {
+    if (fd_valid(fd) && inet_is_socket(&fd_table[fd].file))
+        return inet_listen(&fd_table[fd].file);
+
     Socket *s = sock_from_fd(fd);
     if (!s)
         return -EBADF;
@@ -345,6 +351,9 @@ int64_t sock_sys_listen(int fd)
 
 int64_t sock_sys_accept(int fd)
 {
+    if (fd_valid(fd) && inet_is_socket(&fd_table[fd].file))
+        return inet_accept(&fd_table[fd].file);
+
     Socket *s = sock_from_fd(fd);
     if (!s)
         return -EBADF;

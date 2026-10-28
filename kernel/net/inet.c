@@ -6,6 +6,7 @@
 #define TCP_RTO_MAX_MS   8000
 #define TCP_MAX_RETRIES  10
 #define TCP_CONNECT_MS   15000
+#define TCP_BACKLOG      16
 #define UDP_QUEUE        16
 #define UDP_MAX_DGRAM    1500
 
@@ -37,6 +38,8 @@ typedef enum
     TCP_FIN_WAIT,
     TCP_CLOSE_WAIT,
     TCP_DONE,
+    TCP_LISTEN,
+    TCP_SYN_RCVD,
 }
 TcpState;
 
@@ -96,6 +99,10 @@ typedef struct InetSocket
     UdpDatagram *udp_queue;
     int       udp_head;
     int       udp_count;
+
+    struct InetSocket *parent;
+    struct InetSocket *backlog[TCP_BACKLOG];
+    int       backlog_len;
 }
 InetSocket;
 
@@ -242,6 +249,33 @@ static void tcp_output(InetSocket *s)
 
 static void inet_free(InetSocket *s)
 {
+    if (s->parent)
+    {
+        InetSocket *l = s->parent;
+        for (int i = 0; i < l->backlog_len; i++)
+        {
+            if (l->backlog[i] != s)
+                continue;
+            for (int j = i + 1; j < l->backlog_len; j++)
+                l->backlog[j - 1] = l->backlog[j];
+            l->backlog_len--;
+            break;
+        }
+    }
+
+    if (s->kind == INET_TCP && s->state == TCP_LISTEN)
+    {
+        for (int i = 0; i < INET_MAX_SOCKETS; i++)
+        {
+            InetSocket *c = &inet_sockets[i];
+            if (!c->used || c->parent != s)
+                continue;
+            c->parent = NULL;
+            tcp_send_segment(c, c->snd_nxt, TCP_RST, NULL, 0);
+            inet_free(c);
+        }
+    }
+
     if (s->rx)
         pmm_free_pages(s->rx, TCP_RX_SIZE / PAGE_SIZE);
     if (s->tx)
@@ -249,6 +283,62 @@ static void inet_free(InetSocket *s)
     if (s->udp_queue)
         kfree(s->udp_queue);
     memset(s, 0, sizeof(*s));
+}
+
+static InetSocket *inet_alloc(InetKind kind, uint32_t flags)
+{
+    uint64_t irq = irq_save();
+    InetSocket *s = NULL;
+    for (int i = 0; i < INET_MAX_SOCKETS && !s; i++)
+        if (!inet_sockets[i].used)
+            s = &inet_sockets[i];
+    if (s)
+    {
+        memset(s, 0, sizeof(*s));
+        s->used = true;
+    }
+    irq_restore(irq);
+    if (!s)
+        return NULL;
+
+    s->kind = kind;
+    s->flags = flags & SOCK_NONBLOCK;
+    s->node.type = VNODE_SOCKET;
+    s->node.file_ops = &inet_file_ops;
+    s->node.private_data = s;
+    strncpy(s->node.name, kind == INET_UDP ? "udp" : "tcp", VFS_NAME_MAX - 1);
+
+    if (kind == INET_UDP)
+    {
+        s->udp_queue = kcalloc(UDP_QUEUE, sizeof(UdpDatagram));
+        s->local_port = inet_alloc_port();
+        if (!s->udp_queue || !s->local_port)
+        {
+            inet_free(s);
+            return NULL;
+        }
+    }
+    else
+    {
+        s->rx = pmm_alloc_pages(TCP_RX_SIZE / PAGE_SIZE);
+        s->tx = pmm_alloc_pages(TCP_TX_SIZE / PAGE_SIZE);
+        if (!s->rx || !s->tx)
+        {
+            inet_free(s);
+            return NULL;
+        }
+    }
+    return s;
+}
+
+static int64_t inet_install_fd(InetSocket *s)
+{
+    int fd = fd_alloc();
+    if (fd == FD_INVALID)
+        return -EMFILE;
+    fd_table[fd].file.node = &s->node;
+    fd_table[fd].file.flags = VFS_O_RDWR;
+    return fd;
 }
 
 static void tcp_reset(InetSocket *s, int error)
@@ -273,6 +363,54 @@ static InetSocket *inet_find_tcp(Ipv4Addr ip, uint16_t remote_port, uint16_t loc
     return NULL;
 }
 
+static InetSocket *inet_find_listener(uint16_t local_port)
+{
+    for (int i = 0; i < INET_MAX_SOCKETS; i++)
+    {
+        InetSocket *s = &inet_sockets[i];
+        if (s->used && s->kind == INET_TCP && s->state == TCP_LISTEN && s->local_port == local_port)
+            return s;
+    }
+    return NULL;
+}
+
+static void tcp_passive_open(Ipv4Addr src_ip, const TcpHeader *h)
+{
+    if ((h->flags & (TCP_SYN | TCP_ACK | TCP_RST)) != TCP_SYN)
+        return;
+
+    InetSocket *l = inet_find_listener(net_htons(h->dst_port));
+    if (!l)
+        return;
+
+    int pending = 0;
+    for (int i = 0; i < INET_MAX_SOCKETS; i++)
+        if (inet_sockets[i].used && inet_sockets[i].parent == l)
+            pending++;
+    if (pending >= TCP_BACKLOG)
+        return;
+
+    InetSocket *c = inet_alloc(INET_TCP, 0);
+    if (!c)
+        return;
+
+    c->remote_ip = src_ip;
+    c->remote_port = net_htons(h->src_port);
+    c->local_port = l->local_port;
+    c->connected = true;
+    c->orphan = true;
+    c->parent = l;
+    c->iss = inet_random();
+    c->snd_una = c->iss;
+    c->snd_nxt = c->iss + 1;
+    c->snd_wnd = net_htons(h->window);
+    c->rcv_nxt = net_htonl(h->seq) + 1;
+    c->rto_ms = 1000;
+    c->state = TCP_SYN_RCVD;
+    tcp_send_segment(c, c->iss, TCP_SYN | TCP_ACK, NULL, 0);
+    tcp_arm_timer(c);
+}
+
 void inet_tcp_deliver(Ipv4Addr src_ip, const uint8_t *data, uint16_t len)
 {
     if (len < sizeof(TcpHeader))
@@ -285,7 +423,10 @@ void inet_tcp_deliver(Ipv4Addr src_ip, const uint8_t *data, uint16_t len)
 
     InetSocket *s = inet_find_tcp(src_ip, net_htons(h->src_port), net_htons(h->dst_port));
     if (!s)
+    {
+        tcp_passive_open(src_ip, h);
         return;
+    }
 
     uint8_t flags = h->flags;
     uint32_t seq = net_htonl(h->seq);
@@ -315,7 +456,26 @@ void inet_tcp_deliver(Ipv4Addr src_ip, const uint8_t *data, uint16_t len)
         return;
     }
 
-    if (s->state == TCP_CLOSED)
+    if (s->state == TCP_SYN_RCVD)
+    {
+        if ((flags & (TCP_SYN | TCP_ACK)) == TCP_SYN)
+        {
+            tcp_send_segment(s, s->iss, TCP_SYN | TCP_ACK, NULL, 0);
+            return;
+        }
+        if (!(flags & TCP_ACK) || ack != s->iss + 1)
+            return;
+
+        s->snd_una = ack;
+        s->state = TCP_ESTABLISHED;
+        s->rto_deadline = 0;
+        s->retries = 0;
+        if (s->parent)
+            s->parent->backlog[s->parent->backlog_len++] = s;
+        task_wake_waiters();
+    }
+
+    if (s->state == TCP_CLOSED || s->state == TCP_LISTEN)
         return;
 
     if (flags & TCP_ACK)
@@ -438,6 +598,11 @@ void inet_tick(void)
             tcp_send_segment(s, s->iss, TCP_SYN, NULL, 0);
             continue;
         }
+        if (s->state == TCP_SYN_RCVD)
+        {
+            tcp_send_segment(s, s->iss, TCP_SYN | TCP_ACK, NULL, 0);
+            continue;
+        }
 
         s->snd_nxt = s->snd_una;
         bool fin_was_sent = s->fin_sent;
@@ -483,6 +648,11 @@ static ssize_t inet_read(VFile *file, void *buf, size_t count)
         }
         else
         {
+            if (s->state == TCP_LISTEN)
+            {
+                irq_restore(flags);
+                return -EINVAL;
+            }
             if (s->rx_count > 0)
             {
                 size_t n = count < s->rx_count ? count : s->rx_count;
@@ -583,6 +753,9 @@ static int inet_poll(VFile *file)
         return r;
     }
 
+    if (s->state == TCP_LISTEN)
+        return s->backlog_len ? POLLIN : 0;
+
     if (s->rx_count > 0 || s->fin_received)
         r |= POLLIN;
     if (s->state == TCP_CLOSED && s->connected)
@@ -666,56 +839,13 @@ bool inet_is_socket(VFile *file)
 
 int64_t inet_socket_create(uint32_t flags)
 {
-    uint64_t irq = irq_save();
-    InetSocket *s = NULL;
-    for (int i = 0; i < INET_MAX_SOCKETS && !s; i++)
-        if (!inet_sockets[i].used)
-            s = &inet_sockets[i];
+    InetSocket *s = inet_alloc((flags & SOCK_UDP) ? INET_UDP : INET_TCP, flags);
     if (!s)
-    {
-        irq_restore(irq);
         return -EMFILE;
-    }
-    memset(s, 0, sizeof(*s));
-    s->used = true;
-    irq_restore(irq);
 
-    s->kind = (flags & SOCK_UDP) ? INET_UDP : INET_TCP;
-    s->flags = flags & SOCK_NONBLOCK;
-    s->node.type = VNODE_SOCKET;
-    s->node.file_ops = &inet_file_ops;
-    s->node.private_data = s;
-    strncpy(s->node.name, s->kind == INET_UDP ? "udp" : "tcp", VFS_NAME_MAX - 1);
-
-    if (s->kind == INET_UDP)
-    {
-        s->udp_queue = kcalloc(UDP_QUEUE, sizeof(UdpDatagram));
-        s->local_port = inet_alloc_port();
-        if (!s->udp_queue || !s->local_port)
-        {
-            inet_free(s);
-            return -ENOMEM;
-        }
-    }
-    else
-    {
-        s->rx = pmm_alloc_pages(TCP_RX_SIZE / PAGE_SIZE);
-        s->tx = pmm_alloc_pages(TCP_TX_SIZE / PAGE_SIZE);
-        if (!s->rx || !s->tx)
-        {
-            inet_free(s);
-            return -ENOMEM;
-        }
-    }
-
-    int fd = fd_alloc();
-    if (fd == FD_INVALID)
-    {
+    int64_t fd = inet_install_fd(s);
+    if (fd < 0)
         inet_free(s);
-        return -EMFILE;
-    }
-    fd_table[fd].file.node = &s->node;
-    fd_table[fd].file.flags = VFS_O_RDWR;
     return fd;
 }
 
@@ -780,6 +910,101 @@ int64_t inet_connect(VFile *file, const char *name)
     int64_t rc = s->state == TCP_ESTABLISHED ? 0 : (s->error ? s->error : -ECONNREFUSED);
     irq_restore(flags);
     return rc;
+}
+
+int64_t inet_bind(VFile *file, const char *name)
+{
+    InetSocket *s = inet_from_file(file);
+    if (!s || !name)
+        return -EBADF;
+
+    Ipv4Addr ip;
+    uint16_t port;
+    if (!inet_parse_addr(name, &ip, &port) || port == 0)
+        return -EINVAL;
+
+    uint64_t flags = irq_save();
+    if (s->connected || s->state != TCP_CLOSED)
+    {
+        irq_restore(flags);
+        return -EINVAL;
+    }
+
+    for (int i = 0; i < INET_MAX_SOCKETS; i++)
+    {
+        InetSocket *o = &inet_sockets[i];
+        if (o != s && o->used && o->kind == s->kind && o->local_port == port && (s->kind == INET_UDP || !o->connected))
+        {
+            irq_restore(flags);
+            return -EADDRINUSE;
+        }
+    }
+
+    s->local_port = port;
+    irq_restore(flags);
+    return 0;
+}
+
+int64_t inet_listen(VFile *file)
+{
+    InetSocket *s = inet_from_file(file);
+    if (!s)
+        return -EBADF;
+
+    uint64_t flags = irq_save();
+    if (s->kind != INET_TCP || s->state != TCP_CLOSED || s->connected || s->local_port == 0)
+    {
+        irq_restore(flags);
+        return -EINVAL;
+    }
+
+    s->state = TCP_LISTEN;
+    irq_restore(flags);
+    return 0;
+}
+
+int64_t inet_accept(VFile *file)
+{
+    InetSocket *s = inet_from_file(file);
+    if (!s)
+        return -EBADF;
+
+    uint64_t flags = irq_save();
+    for (;;)
+    {
+        if (s->kind != INET_TCP || s->state != TCP_LISTEN)
+        {
+            irq_restore(flags);
+            return -EINVAL;
+        }
+
+        if (s->backlog_len > 0)
+        {
+            InetSocket *c = s->backlog[0];
+            for (int i = 1; i < s->backlog_len; i++)
+                s->backlog[i - 1] = s->backlog[i];
+            s->backlog_len--;
+            c->parent = NULL;
+            c->orphan = false;
+            c->flags = s->flags;
+
+            int64_t fd = inet_install_fd(c);
+            if (fd < 0)
+            {
+                tcp_send_segment(c, c->snd_nxt, TCP_RST, NULL, 0);
+                inet_free(c);
+            }
+            irq_restore(flags);
+            return fd;
+        }
+
+        if (s->flags & SOCK_NONBLOCK)
+        {
+            irq_restore(flags);
+            return -EAGAIN;
+        }
+        task_block(TASK_BLOCK_FOREVER);
+    }
 }
 
 void inet_init(void)
