@@ -60,7 +60,7 @@ git submodule update --init --recursive
 | --- | --- |
 | `kernel/` | The kernel: CPU setup, memory, scheduler, filesystems, drivers, networking, kernel call table |
 | `modules/src/` | Userspace programs: StrawX server and shell, apps, Lua shell, NetSurf and Discord frontends |
-| `modules/lib/` | Userspace libraries: libc, StrawX client library, networking/TLS, and third-party submodules |
+| `modules/lib/` | Userspace libraries: libc, StrawX client library ([docs](modules/lib/strawx/README.md)), networking/TLS, and third-party submodules |
 | `modules/root/` | Files copied into the OS root filesystem (icons, wallpapers, desktop entries, scripts) |
 | `content/` | Project assets such as the logo |
 | `limine/` | Limine bootloader binaries (submodule) |
