@@ -1,0 +1,38 @@
+--- a/core/start.lua
++++ b/core/start.lua
+@@ -9,7 +9,7 @@
+ if MACOS_RESOURCES then
+   DATADIR = MACOS_RESOURCES
+ else
+-  local prefix = EXEDIR:match("^(.+)[/\\]bin$")
++  local prefix = EXEDIR:match("^(.*)[/\\]bin$")
+   DATADIR = prefix and (prefix .. PATHSEP .. 'share' .. PATHSEP .. 'lite-xl') or (EXEDIR .. PATHSEP .. 'data')
+ end
+ USERDIR = (system.get_file_info(EXEDIR .. PATHSEP .. 'user') and (EXEDIR .. PATHSEP .. 'user'))
+--- a/core/init.lua
++++ b/core/init.lua
+@@ -649,6 +649,12 @@
+ end
+ 
+ 
++-- a directory at the filesystem root already ends with the separator: "/file", not "//file"
++local function join_path(dir, filename)
++  return (dir:sub(-1) == PATHSEP and dir or dir .. PATHSEP) .. filename
++end
++
++
+ -- The function below works like system.absolute_path except it
+ -- doesn't fail if the file does not exist. We consider that the
+ -- current dir is core.project_dir so relative filename are considered
+@@ -661,9 +667,9 @@
+     return common.normalize_path(filename)
+   elseif not core.project_dir then
+     local cwd = system.absolute_path(".")
+-    return cwd .. PATHSEP .. common.normalize_path(filename)
++    return join_path(cwd, common.normalize_path(filename))
+   else
+-    return core.project_dir .. PATHSEP .. filename
++    return join_path(core.project_dir, filename)
+   end
+ end
+ 

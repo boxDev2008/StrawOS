@@ -1,0 +1,55 @@
+--- a/core/doc/init.lua
++++ b/core/doc/init.lua
+@@ -70,7 +70,8 @@
+   self:reset()
+   self.lines = {}
+   local i = 1
+-  for line in fp:lines() do
++  for raw_line in fp:lines() do
++    local line = raw_line
+     if line:byte(-1) == 13 then
+       line = line:sub(1, -2)
+       self.crlf = true
+--- a/core/keymap.lua
++++ b/core/keymap.lua
+@@ -122,7 +122,7 @@
+ ---@param map keymap.map
+ function keymap.add_direct(map)
+   for stroke, commands in pairs(map) do
+-    stroke = normalize_stroke(stroke)
++    local stroke = normalize_stroke(stroke)
+ 
+     if type(commands) == "string" or type(commands) == "function" then
+       commands = { commands }
+@@ -147,7 +147,8 @@
+ ---@param overwrite? boolean
+ function keymap.add(map, overwrite)
+   remove_duplicates(map)
+-  for stroke, commands in pairs(map) do
++  for raw_stroke, commands in pairs(map) do
++    local stroke = raw_stroke
+     if macos then
+       stroke = stroke:gsub("%f[%a]ctrl%f[%A]", "cmd")
+     end
+--- a/core/logview.lua
++++ b/core/logview.lua
+@@ -179,6 +179,7 @@
+ 
+   local tw = style.font:get_width(datestr)
+   for _, item, x, y, w, h in self:each_item() do
++    local _
+     if y + h >= self.position.y and y <= self.position.y + self.size.y then
+       core.push_clip_rect(x, y, w, h)
+       x = x + style.padding.x
+--- a/core/strict.lua
++++ b/core/strict.lua
+@@ -3,7 +3,8 @@
+ 
+ 
+ -- used to define a global variable
+-function global(t)
++-- (assigned by key: 'global' is a reserved word in Lua 5.5 without LUA_COMPAT_GLOBAL)
++_G["global"] = function(t)
+   for k, v in pairs(t) do
+     strict.defined[k] = true
+     rawset(_G, k, v)

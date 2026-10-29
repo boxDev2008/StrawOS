@@ -54,6 +54,7 @@ double ceil(double x);
 double trunc(double x);
 double round(double x);
 double fmod(double x, double y);
+double modf(double x, double *ip);
 double sqrt(double x);
 double exp(double x);
 double ldexp(double x, int exp);

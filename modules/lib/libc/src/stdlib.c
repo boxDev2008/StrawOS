@@ -180,9 +180,21 @@ void abort(void)
     exit(1);
 }
 
+/* The environment is per process: tasks start with an empty one and setenv() builds it up */
+
+static int env_find(const char *name, size_t len)
+{
+    for (int i = 0; environ[i]; i++)
+        if (strncmp(environ[i], name, len) == 0 && environ[i][len] == '=')
+            return i;
+    return -1;
+}
+
 char *getenv(const char *name)
 {
-    return NULL;
+    size_t len = strlen(name);
+    int i = env_find(name, len);
+    return i >= 0 ? environ[i] + len + 1 : NULL;
 }
 
 int system(const char *command)
@@ -626,16 +638,72 @@ int mkstemp(char *tmpl)
     return -1;
 }
 
+static bool env_valid_name(const char *name)
+{
+    return name && *name && !strchr(name, '=');
+}
+
 int setenv(const char *name, const char *value, int overwrite)
 {
-    (void)name;
-    (void)value;
-    (void)overwrite;
+    if (!env_valid_name(name))
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t len = strlen(name);
+    int i = env_find(name, len);
+    if (i >= 0 && !overwrite)
+        return 0;
+
+    char *entry = malloc(len + strlen(value) + 2);
+    if (!entry)
+    {
+        errno = ENOMEM;
+        return -1;
+    }
+    strcpy(entry, name);
+    entry[len] = '=';
+    strcpy(entry + len + 1, value);
+
+    /* replaced entries are not freed: a caller may still hold a getenv() pointer into them */
+    if (i >= 0)
+    {
+        environ[i] = entry;
+        return 0;
+    }
+
+    int count = 0;
+    while (environ[count])
+        count++;
+    static char **owned;
+    char **grown = realloc(environ == owned ? owned : NULL, (size_t)(count + 2) * sizeof(char *));
+    if (!grown)
+    {
+        free(entry);
+        errno = ENOMEM;
+        return -1;
+    }
+    if (environ != owned)
+        memcpy(grown, environ, (size_t)count * sizeof(char *));
+    grown[count] = entry;
+    grown[count + 1] = NULL;
+    environ = owned = grown;
     return 0;
 }
 
 int unsetenv(const char *name)
 {
-    (void)name;
+    if (!env_valid_name(name))
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t len = strlen(name);
+    int i;
+    while ((i = env_find(name, len)) >= 0)
+        for (; environ[i]; i++)
+            environ[i] = environ[i + 1];
     return 0;
 }

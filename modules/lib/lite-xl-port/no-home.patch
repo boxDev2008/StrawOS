@@ -1,0 +1,19 @@
+--- a/core/common.lua
++++ b/core/common.lua
+@@ -484,6 +484,8 @@
+ ---@param text string
+ ---@return string
+ function common.home_encode(text)
++  -- rawget: HOME is never defined when $HOME is unset, and strict mode rejects reading it
++  local HOME = rawget(_G, "HOME")
+   if HOME and string.find(text, HOME, 1, true) == 1 then
+     local dir_pos = #HOME + 1
+     -- ensure we don't replace if the text is just "$HOME" or "$HOME/" so
+@@ -513,6 +515,7 @@
+ ---@param text string
+ ---@return string
+ function common.home_expand(text)
++  local HOME = rawget(_G, "HOME")
+   return HOME and text:gsub("^~", HOME) or text
+ end
+ 

@@ -19,3 +19,10 @@ typedef unsigned long long uintptr_t;
 typedef long long ptrdiff_t;
 
 typedef unsigned long long size_t;
+
+typedef struct
+{
+    long long   ll;
+    long double ld;
+}
+max_align_t;

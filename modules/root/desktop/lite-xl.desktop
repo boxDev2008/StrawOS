@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Lite XL
+Comment=Edit code
+Icon=/share/icons/lite-xl.png
+Exec=/bin/lite-xl.elf

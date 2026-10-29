@@ -25,6 +25,7 @@
 - **Apps**: Files, Notes, Paint, Pictures, Calculator, Clock, System Monitor, Settings and a 3D cube demo
 - **NetSurf**: web browser, ported to StrawX
 - **TinyCC**: compile C programs
+- **Lite XL**: code editor with split panes and drag-and-drop tabs, ported to StrawX and Lua 5.5
 - **Discord**: an experimental client
 - `fetch`: a command-line HTTP(S) downloader
 
@@ -72,6 +73,9 @@ StrawOS bundles these projects as git submodules:
 [Lua](https://github.com/lua/lua),
 [BearSSL](https://www.bearssl.org/),
 [NetSurf](https://www.netsurf-browser.org/) and its libraries,
+[Lite XL](https://github.com/lite-xl/lite-xl),
+[FreeType](https://freetype.org/),
+[PCRE2](https://github.com/PCRE2Project/pcre2),
 [stb](https://github.com/nothings/stb) and
 [TinyCC](https://repo.or.cz/tinycc.git).
 Each one keeps its own license. Wallpaper credits are in `modules/root/pictures/CREDITS.txt`.

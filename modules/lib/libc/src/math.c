@@ -27,6 +27,17 @@ double trunc(double x)
     return (double)(long long)x;
 }
 
+double modf(double x, double *ip)
+{
+    if (isnan(x) || isinf(x) || fabs(x) >= 4503599627370496.0)
+    {
+        *ip = x;
+        return isnan(x) ? x : 0.0;
+    }
+    *ip = trunc(x);
+    return x - *ip;
+}
+
 double round(double x)
 {
     return floor(x + 0.5);
