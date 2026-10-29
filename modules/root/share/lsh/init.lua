@@ -1,12 +1,9 @@
 local C = {}
 local help = {}
 
-shell = {
-    commands = C,
-    path = "/bin",
-    columns = 80,
-    history = {},
-}
+shell.commands = C
+shell.columns = 80
+shell.history = {}
 
 local RESET, BOLD = "\27[0m", "\27[1m"
 local RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, GRAY = "\27[31m", "\27[32m", "\27[33m", "\27[34m", "\27[35m", "\27[36m", "\27[90m"
@@ -40,11 +37,11 @@ local function join(dir, name)
 end
 
 local function abs(path)
-    return sys.realpath(path) or path
+    return system.realpath(path) or path
 end
 
 local function is_dir(path)
-    local st = sys.stat(path)
+    local st = system.stat(path)
     return st and st.type == "dir"
 end
 
@@ -68,38 +65,8 @@ local function command(name, usage, desc, fn)
     help[#help + 1] = { name = name, usage = usage, desc = desc }
 end
 
-local function resolve_program(name)
-    if name:find("/", 1, true) then
-        for _, candidate in ipairs({ name, name .. ".elf" }) do
-            local st = sys.stat(candidate)
-            if st and st.type == "file" then return abs(candidate) end
-        end
-        return nil
-    end
-    for dir in shell.path:gmatch("[^:]+") do
-        for _, candidate in ipairs({ join(dir, name .. ".elf"), join(dir, name) }) do
-            local st = sys.stat(candidate)
-            if st and st.type == "file" and candidate:match("%.elf$") then return candidate end
-        end
-    end
-    for _, candidate in ipairs({ name .. ".elf", name }) do
-        local st = sys.stat(candidate)
-        if st and st.type == "file" and candidate:match("%.elf$") then return abs(candidate) end
-    end
-end
-
-local raw_spawn, raw_run = sys.spawn, sys.run
-
-function sys.spawn(prog, ...)
-    return raw_spawn(type(prog) == "string" and resolve_program(prog) or prog, ...)
-end
-
-function sys.run(prog, ...)
-    return raw_run(type(prog) == "string" and resolve_program(prog) or prog, ...)
-end
-
 local function list_sorted(path)
-    local entries, e = sys.list(path)
+    local entries, e = system.list(path)
     if not entries then fail(e) end
     table.sort(entries, function(a, b)
         if (a.type == "dir") ~= (b.type == "dir") then return a.type == "dir" end
@@ -125,7 +92,7 @@ command("help", "help", "show this list", function()
     out("\nPrograms in /bin run by name, e.g. ", GREEN, "cube", RESET, " or ", GREEN, "files /pictures", RESET, ".\n")
     out("Start a line with ", YELLOW, "=", RESET, " to print a value, e.g. ", YELLOW, "=2^10", RESET, ".\n")
     out("Commands are also Lua functions: ", YELLOW, "sh.ls(\"/bin\")", RESET, ", ",
-        YELLOW, "sys.list(\"/\")", RESET, ".\n")
+        YELLOW, "system.list(\"/\")", RESET, ".\n")
 end)
 
 command("ls", "ls [-l] [path]", "list a directory", function(...)
@@ -137,7 +104,7 @@ command("ls", "ls [-l] [path]", "list a directory", function(...)
 
     for i, path in ipairs(args) do
         if #args > 1 then out(BOLD, path, ":", RESET, "\n") end
-        local st = sys.stat(path)
+        local st = system.stat(path)
         if not st then fail(path .. ": no such file or directory") end
         local entries = st.type == "dir" and list_sorted(path) or { { name = basename(path), type = st.type, size = st.size } }
 
@@ -165,12 +132,12 @@ command("ls", "ls [-l] [path]", "list a directory", function(...)
 end)
 
 command("cd", "cd [dir]", "change the current directory", function(dir)
-    local ok, e = sys.cd(dir or "/")
+    local ok, e = system.cd(dir or "/")
     if not ok then fail(e) end
 end)
 
 command("pwd", "pwd", "print the current directory", function()
-    out(sys.cwd(), "\n")
+    out(system.cwd(), "\n")
 end)
 
 command("cat", "cat <file...>", "print files", function(...)
@@ -187,14 +154,14 @@ end)
 
 command("mkdir", "mkdir <dir...>", "create directories", function(...)
     for _, path in ipairs({ ... }) do
-        local ok, e = sys.mkdir(path)
+        local ok, e = system.mkdir(path)
         if not ok then fail(e) end
     end
 end)
 
 command("touch", "touch <file...>", "create empty files", function(...)
     for _, path in ipairs({ ... }) do
-        if not sys.stat(path) then write_file(path, "") end
+        if not system.stat(path) then write_file(path, "") end
     end
 end)
 
@@ -213,12 +180,12 @@ command("mv", "mv <from> <to>", "move or rename", function(from, to)
 end)
 
 local function copy(from, to)
-    local st = sys.stat(from)
+    local st = system.stat(from)
     if not st then fail(from .. ": no such file or directory") end
     if st.type == "dir" then
-        local ok, e = sys.mkdir(to)
+        local ok, e = system.mkdir(to)
         if not ok then fail(e) end
-        for _, e2 in ipairs(sys.list(from)) do
+        for _, e2 in ipairs(system.list(from)) do
             copy(join(abs(from), e2.name), join(abs(to), e2.name))
         end
     else
@@ -246,12 +213,12 @@ command("date", "date", "show the date and time", function()
 end)
 
 command("uptime", "uptime", "time since boot", function()
-    local s = sys.uptime() // 1000
+    local s = system.uptime() // 1000
     out(string.format("up %d:%02d:%02d\n", s // 3600, s // 60 % 60, s % 60))
 end)
 
 command("mem", "mem", "memory usage", function()
-    local m = sys.mem()
+    local m = system.mem()
     local used = m.total - m.free
     out(string.format("%s used of %s (%d%%)\n", human_size(used), human_size(m.total), used * 100 // m.total))
 end)
@@ -260,57 +227,57 @@ local function launch(prog, args)
     local background = args[#args] == "&"
     if background then table.remove(args) end
     for i, a in ipairs(args) do
-        if not a:match("^%-") and sys.stat(a) then args[i] = abs(a) end
+        if not a:match("^%-") and system.stat(a) then args[i] = abs(a) end
     end
     if background then
-        local pid = sys.spawn(prog, table.unpack(args))
+        local pid = shell.spawn(prog, table.unpack(args))
         if not pid then fail("could not start " .. prog) end
         out(GRAY, "[", pid, "] started in the background", RESET, "\n")
         return
     end
-    local code, e = sys.run(prog, table.unpack(args))
+    local code, e = shell.run(prog, table.unpack(args))
     if not code then fail(e) end
     shell.last_status = code
 end
 
 command("run", "run <program> [args...]", "start a program (add & to run it in the background)", function(name, ...)
     if not name then fail("usage: run <program> [args...]") end
-    local prog = resolve_program(name)
+    local prog = shell.which(name)
     if not prog then fail(name .. ": program not found") end
     launch(prog, { ... })
 end)
 
 command("kill", "kill <pid>", "stop a background program", function(pid)
-    if not tonumber(pid) or not sys.kill(tonumber(pid)) then fail("no such program: " .. tostring(pid)) end
+    if not tonumber(pid) or not shell.kill(tonumber(pid)) then fail("no such program: " .. tostring(pid)) end
 end)
 
 command("which", "which <name>", "find a program", function(name)
     if C[name] then out(name, ": shell command\n") return end
-    local prog = name and resolve_program(name)
+    local prog = name and shell.which(name)
     if not prog then fail((name or "") .. ": not found") end
     out(prog, "\n")
 end)
 
 command("edit", "edit <file>", "open a file in Notes", function(path)
     if not path then fail("usage: edit <file>") end
-    sys.spawn("/bin/notes.elf", abs(path))
+    shell.spawn("/bin/notes.elf", abs(path))
 end)
 
 command("open", "open <path>", "open with the matching app", function(path)
     path = path or "."
-    local st = sys.stat(path)
+    local st = system.stat(path)
     if not st then fail(path .. ": no such file or directory") end
     local full = abs(path)
     if st.type == "dir" then
-        sys.spawn("/bin/files.elf", full)
+        shell.spawn("/bin/files.elf", full)
     elseif full:match("%.lua$") then
-        sys.spawn("/bin/terminal.elf", "--run", full)
+        shell.spawn("/bin/terminal.elf", "--run", full)
     elseif full:match("%.png$") or full:match("%.bmp$") then
-        sys.spawn("/bin/viewer.elf", full)
+        shell.spawn("/bin/viewer.elf", full)
     elseif full:match("%.elf$") then
-        sys.spawn(full)
+        shell.spawn(full)
     else
-        sys.spawn("/bin/notes.elf", full)
+        shell.spawn("/bin/notes.elf", full)
     end
 end)
 
@@ -328,7 +295,7 @@ end)
 
 local function is_script(word)
     if not word:match("%.lua$") then return false end
-    local st = sys.stat(word)
+    local st = system.stat(word)
     return st and st.type == "file"
 end
 
@@ -466,7 +433,7 @@ local function run_command(word, rest)
         return
     end
 
-    local prog = resolve_program(word)
+    local prog = shell.which(word)
     local ok, e2 = xpcall(launch, traceback, prog, args)
     if not ok then report(e2) end
 end
@@ -480,7 +447,7 @@ function shell.handle(line)
         local trimmed = line:match("^%s*(.-)%s*$")
         if trimmed == "" then return end
         local word, rest = trimmed:match("^([%w_%.%-/~]+)(.*)$")
-        if word and looks_like_command(word, rest) and (C[word] or is_script(word) or resolve_program(word)) then
+        if word and looks_like_command(word, rest) and (C[word] or is_script(word) or shell.which(word)) then
             local defined = rawget(_G, word)
             if not (rest == "" and defined ~= nil and C[word] == nil) then
                 run_command(word, rest)
@@ -508,14 +475,14 @@ end
 
 function shell.prompt()
     if pending then return GRAY .. "  .. " .. RESET end
-    local cwd = sys.cwd()
+    local cwd = system.cwd()
     return YELLOW .. BOLD .. "straw" .. RESET .. " " .. BLUE .. BOLD .. cwd .. RESET .. GRAY .. " > " .. RESET
 end
 
 local function main_script()
     local path = shell.run_script
     local dir = path:match("^(.*)/[^/]*$")
-    if dir and dir ~= "" then sys.cd(dir) else sys.cd("/") end
+    if dir and dir ~= "" then system.cd(dir) else system.cd("/") end
 
     local ok, e = xpcall(run_script, traceback, path, table.unpack(shell.run_args or {}))
     io.flush()
@@ -523,7 +490,7 @@ local function main_script()
 
     out("\n", GRAY, ok and "Script finished." or "Script stopped with an error.", " Press Enter to close this window.", RESET)
     io.flush()
-    pcall(sys.readline)
+    pcall(system.readline)
     return ok and 0 or 1
 end
 
@@ -544,7 +511,7 @@ function shell.main()
         local ok, e = pcall(function()
             io.write(shell.prompt())
             io.flush()
-            local line = sys.readline()
+            local line = system.readline()
             if line == nil then
                 shell.exit_code = 0
             elseif line == false then

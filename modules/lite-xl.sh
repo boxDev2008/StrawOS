@@ -19,7 +19,8 @@ if [ ! -f $GEN/pcre2/config.h ] || [ lib/pcre2/src/pcre2.h.generic -nt $GEN/pcre
 fi
 
 # runtime data, with the patches in lib/lite-xl-port applied (lua55: Lua 5.5 compatibility;
-# root-dir: running from /bin with projects at /; no-home: no $HOME on StrawOS) and the
+# root-dir: running from /bin with projects at /; no-home: no $HOME on StrawOS;
+# open-in-system: the treeview's "Open in System" shows the item in Files) and the
 # version meson would have filled in
 DATA=obj/lite-xl-data
 if [ ! -f $DATA/core/start.lua ] || [ -n "$(find $PORT -name '*.patch' -newer $DATA/core/start.lua -print -quit)" ] ||

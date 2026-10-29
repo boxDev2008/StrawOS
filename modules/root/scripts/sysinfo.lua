@@ -12,8 +12,8 @@ end
 print(BOLD .. "System information" .. RESET)
 print()
 
-local mem = sys.mem()
-local up = sys.uptime() // 1000
+local mem = system.mem()
+local up = system.uptime() // 1000
 row("Date", os.date("%A %d %B %Y, %H:%M"))
 row("Uptime", ("%d:%02d:%02d"):format(up // 3600, up // 60 % 60, up % 60))
 row("Memory", ("%s used of %s"):format(size(mem.total - mem.free), size(mem.total)))
@@ -22,7 +22,7 @@ print()
 
 print(BOLD .. "Programs in /bin" .. RESET)
 local total = 0
-for _, e in ipairs(sys.list("/bin")) do
+for _, e in ipairs(system.list("/bin")) do
     total = total + e.size
     print(("  %s%-16s%s %10s"):format(CYAN, e.name, RESET, size(e.size)))
 end

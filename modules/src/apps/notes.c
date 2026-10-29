@@ -53,7 +53,7 @@ static const char *lua_builtins[] = {
     "print", "pairs", "ipairs", "require", "type", "tostring", "tonumber", "select", "error", "assert",
     "pcall", "xpcall", "setmetatable", "getmetatable", "rawget", "rawset", "rawequal", "rawlen", "next",
     "load", "loadfile", "dofile", "collectgarbage", "string", "table", "math", "io", "os", "coroutine",
-    "utf8", "debug", "package", "sys", "sh", "shell", "arg", "_G", "_ENV", "_VERSION", "self", NULL,
+    "utf8", "debug", "package", "system", "sh", "shell", "arg", "_G", "_ENV", "_VERSION", "self", NULL,
 };
 
 static bool word_in(const char *s, int len, const char **list)

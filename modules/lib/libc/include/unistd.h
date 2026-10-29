@@ -19,6 +19,8 @@ int close(int fd);
 int unlink(const char *path);
 void wait(uint32_t ms);
 pid_t spawn(const char *path, const char *argv[]);
+char *find_program(const char *name, char *resolved);
+pid_t spawnp(const char *file, const char *argv[]);
 int kill(pid_t pid);
 pid_t getpid(void);
 int waitpid(pid_t pid, uint32_t flags);

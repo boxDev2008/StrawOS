@@ -237,6 +237,53 @@ pid_t spawn(const char *path, const char *argv[])
     return (pid_t)kcall(KCALL_SPAWN, (uint64_t)full, (uint64_t)argv, 0, 0);
 }
 
+static bool is_file(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0 && st.type == STAT_FILE;
+}
+
+static bool is_elf_name(const char *path)
+{
+    size_t len = strlen(path);
+    return len > 4 && strcmp(path + len - 4, ".elf") == 0;
+}
+
+char *find_program(const char *name, char *resolved)
+{
+    char cand[PATH_BUF * 2];
+    char full[PATH_BUF];
+    bool has_slash = strchr(name, '/') != NULL;
+
+    if (!has_slash)
+    {
+        const char *forms[] = { "/bin/%s.elf", "/bin/%s" };
+        for (int i = 0; i < 2; i++)
+        {
+            snprintf(cand, sizeof(cand), forms[i], name);
+            if (is_elf_name(cand) && is_file(cand) && abs_path(cand, full))
+                return strcpy(resolved, full);
+        }
+    }
+
+    const char *forms[] = { "%s", "%s.elf" };
+    for (int i = 0; i < 2; i++)
+    {
+        snprintf(cand, sizeof(cand), forms[has_slash ? i : 1 - i], name);
+        if ((has_slash || is_elf_name(cand)) && is_file(cand) && abs_path(cand, full))
+            return strcpy(resolved, full);
+    }
+    return NULL;
+}
+
+pid_t spawnp(const char *file, const char *argv[])
+{
+    char full[PATH_BUF];
+    if (!find_program(file, full))
+        return 0;
+    return spawn(full, argv);
+}
+
 int kill(pid_t pid)
 {
     return (int)kcall(KCALL_KILL, (uint64_t)pid, 0, 0, 0);

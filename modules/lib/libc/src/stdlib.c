@@ -199,7 +199,57 @@ char *getenv(const char *name)
 
 int system(const char *command)
 {
-    return 0;
+    if (!command)
+        return 1;
+
+    char buf[1024];
+    const char *argv[32];
+    int argc = 0;
+    size_t n = 0;
+    const char *p = command;
+
+    for (;;)
+    {
+        while (isspace(*p))
+            p++;
+        if (!*p)
+            break;
+        if (argc == 31)
+            return -1;
+
+        argv[argc++] = buf + n;
+        while (*p && !isspace(*p))
+        {
+            char q = 0;
+            if (*p == '\'' || *p == '"')
+                q = *p++;
+            while (*p && (q ? *p != q : !isspace(*p) && *p != '\'' && *p != '"'))
+            {
+                if (*p == '\\' && q != '\'' && p[1])
+                    p++;
+                if (n >= sizeof(buf) - 1)
+                    return -1;
+                buf[n++] = *p++;
+            }
+            if (q && *p == q)
+                p++;
+        }
+        if (n >= sizeof(buf))
+            return -1;
+        buf[n++] = '\0';
+    }
+
+    bool background = argc > 0 && strcmp(argv[argc - 1], "&") == 0;
+    if (background)
+        argc--;
+    if (argc == 0)
+        return -1;
+    argv[argc] = NULL;
+
+    pid_t pid = spawnp(argv[0], argv);
+    if (!pid)
+        return -1;
+    return background ? 0 : waitpid(pid, 0);
 }
 
 static int digit_val(char c)

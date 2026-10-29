@@ -1,0 +1,11 @@
+--- a/plugins/treeview.lua
++++ b/plugins/treeview.lua
+@@ -802,6 +802,8 @@
+       system.exec(string.format("open %q", item.abs_filename))
+     elseif PLATFORM == "Linux" or string.find(PLATFORM, "BSD") then
+       system.exec(string.format("xdg-open %q", item.abs_filename))
++    elseif PLATFORM == "StrawOS" then
++      system.exec(string.format("/bin/files.elf %q", item.abs_filename))
+     end
+   end
+ })

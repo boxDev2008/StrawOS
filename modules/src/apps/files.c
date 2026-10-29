@@ -2118,8 +2118,20 @@ int main(int argc, char **argv)
     if (!F.win)
         return 1;
 
-    const char *start = argc > 1 && argv[1][0] == '/' ? argv[1] : "/";
-    if (!load_dir(start, NULL))
+    char start[PATH_MAX_LEN] = "/";
+    const char *select = NULL;
+    struct stat st;
+    if (argc > 1 && argv[1][0] == '/' && strlen(argv[1]) < PATH_MAX_LEN && stat(argv[1], &st) == 0)
+    {
+        strcpy(start, argv[1]);
+        char *slash = strrchr(start, '/');
+        if (st.type != STAT_DIR && slash[1])
+        {
+            select = argv[1] + (slash - start) + 1;
+            slash[slash == start] = '\0';
+        }
+    }
+    if (!load_dir(start, select))
         load_dir("/", NULL);
     draw();
 

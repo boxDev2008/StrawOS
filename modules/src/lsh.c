@@ -210,6 +210,15 @@ static int l_mkdir(lua_State *L)
     return luaL_fileresult(L, mkdir(luaL_checkstring(L, 1), 0) == 0, lua_tostring(L, 1));
 }
 
+static int l_which(lua_State *L)
+{
+    char buf[256];
+    if (!find_program(luaL_checkstring(L, 1), buf))
+        return 0;
+    lua_pushstring(L, buf);
+    return 1;
+}
+
 static int l_spawn(lua_State *L)
 {
     int n = lua_gettop(L);
@@ -220,7 +229,7 @@ static int l_spawn(lua_State *L)
     for (int i = 2; i <= n && argc < 31; i++)
         argv[argc++] = luaL_checkstring(L, i);
     argv[argc] = NULL;
-    pid_t pid = spawn(path, argv);
+    pid_t pid = spawnp(path, argv);
     if (!pid)
         return 0;
     lua_pushinteger(L, (lua_Integer)pid);
@@ -261,6 +270,21 @@ static int l_run(lua_State *L)
             return luaL_error(L, "interrupted");
         }
     }
+}
+
+static int l_exec(lua_State *L)
+{
+    const char *command = luaL_checkstring(L, 1);
+    fflush(stdout);
+    int code = system(command);
+    if (code < 0)
+    {
+        lua_pushnil(L);
+        lua_pushfstring(L, "%s: could not start the program", command);
+        return 2;
+    }
+    lua_pushinteger(L, code);
+    return 1;
 }
 
 static int l_kill(lua_State *L)
@@ -416,7 +440,8 @@ static int l_close(lua_State *L)
     return 0;
 }
 
-static const luaL_Reg sys_lib[] = {
+static const luaL_Reg system_lib[] = {
+    { "exec",     l_exec },
     { "resolve",  l_resolve },
     { "netinfo",  l_netinfo },
     { "connect",  l_connect },
@@ -429,13 +454,18 @@ static const luaL_Reg sys_lib[] = {
     { "cd",       l_cd },
     { "realpath", l_realpath },
     { "mkdir",    l_mkdir },
-    { "spawn",    l_spawn },
-    { "run",      l_run },
-    { "kill",     l_kill },
     { "sleep",    l_sleep },
     { "uptime",   l_uptime },
     { "mem",      l_mem },
     { "readline", l_readline },
+    { NULL, NULL },
+};
+
+static const luaL_Reg shell_lib[] = {
+    { "which",    l_which },
+    { "spawn",    l_spawn },
+    { "run",      l_run },
+    { "kill",     l_kill },
     { NULL, NULL },
 };
 
@@ -474,8 +504,10 @@ int main(int argc, char **argv)
     }
     luaL_openlibs(L);
 
-    luaL_newlib(L, sys_lib);
-    lua_setglobal(L, "sys");
+    luaL_newlib(L, system_lib);
+    lua_setglobal(L, "system");
+    luaL_newlib(L, shell_lib);
+    lua_setglobal(L, "shell");
 
     lua_sethook(L, interrupt_hook, LUA_MASKCOUNT, 20000);
 
