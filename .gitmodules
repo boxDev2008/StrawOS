@@ -41,3 +41,12 @@
 [submodule "modules/lib/tinycc"]
 	path = modules/lib/tinycc
 	url = https://repo.or.cz/tinycc.git
+[submodule "modules/lib/lite-xl"]
+	path = modules/lib/lite-xl
+	url = https://github.com/lite-xl/lite-xl
+[submodule "modules/lib/freetype"]
+	path = modules/lib/freetype
+	url = https://gitlab.freedesktop.org/freetype/freetype.git
+[submodule "modules/lib/pcre2"]
+	path = modules/lib/pcre2
+	url = https://github.com/PCRE2Project/pcre2
