@@ -9,7 +9,7 @@
 #define CONFIG_TCC_SEMLOCK 0
 
 #define CONFIG_TCCDIR "/usr/lib/tcc"
-#define CONFIG_TCC_SYSINCLUDEPATHS "{B}/include:/usr/include"
+#define CONFIG_TCC_SYSINCLUDEPATHS "{B}/include:/usr/include:/usr/include/strawx"
 #define CONFIG_TCC_LIBPATHS "{B}:/usr/lib"
 #define CONFIG_TCC_CRTPREFIX "/usr/lib"
 #define CONFIG_TCC_ELFINTERP "/lib/ld-strawos.so"

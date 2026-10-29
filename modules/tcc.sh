@@ -10,12 +10,12 @@ CFLAGS="--target=x86_64-unknown-none -O2 -ffreestanding -nostdlibinc -mno-red-zo
         -Ilib/libc/include"
 
 STAMP=$OBJ/sysroot.stamp
-if [ -f $STAMP ] && [ -z "$(find tcc.sh crt0.c lib/libc $TCC/include $TCC/lib -newer $STAMP -print -quit)" ]; then
+if [ -f $STAMP ] && [ -z "$(find tcc.sh crt0.c lib/libc lib/strawx lib/stb $TCC/include $TCC/lib -newer $STAMP -print -quit)" ]; then
     exit 0
 fi
 
 rm -rf $SYSROOT
-mkdir -p $OBJ $SYSROOT/usr/include $SYSROOT/usr/lib/tcc/include
+mkdir -p $OBJ $SYSROOT/usr/include/strawx $SYSROOT/usr/lib/tcc/include
 
 # headers: libc for /usr/include, tcc's own (stdarg.h, tccdefs.h, ...) for /usr/lib/tcc/include,
 # skipping the ones libc already provides so the types stay consistent with libc.a
@@ -31,6 +31,12 @@ echo "" | clang $CFLAGS -x c -c - -o $SYSROOT/usr/lib/crtn.o
 
 clang $CFLAGS -c lib/libc/libc.c -o $OBJ/libc.o
 llvm-ar rcs $SYSROOT/usr/lib/libc.a $OBJ/libc.o
+
+# strawx: headers get their own dir (generic names like settings.h/theme.h) which tcc searches
+# by default, so programs use <strawx.h> like the built-in apps; link with -lstrawx
+cp lib/strawx/*.h $SYSROOT/usr/include/strawx/
+clang $CFLAGS -Ilib/strawx -Ilib/stb -c lib/strawx/strawx.c -o $OBJ/strawx.o
+llvm-ar rcs $SYSROOT/usr/lib/libstrawx.a $OBJ/strawx.o
 
 # tcc runtime support (va_arg helpers, atomics, alloca, ...)
 L1="libtcc1.c stdatomic.c atomic.S builtin.c alloca.S alloca-bt.S va_list.c dsohandle.c"
