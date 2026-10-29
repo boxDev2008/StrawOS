@@ -681,7 +681,12 @@ static void handle_mouse_event(const MouseEvent *ev)
     if (changed & SX_BUTTON_MIDDLE)
         handle_other_button(SX_BUTTON_MIDDLE, (ev->buttons & SX_BUTTON_MIDDLE) != 0);
 
-    if (ev->wheel)
+    if (ev->wheel && S.menu_open && sx_rect_contains(menu_rect(), S.mx, S.my))
+    {
+        menu_scroll_by(-ev->wheel * MENU_TILE_H / 2);
+        update_hover();
+    }
+    else if (ev->wheel)
     {
         Window *target = S.drag == DRAG_CLIENT ? S.drag_win : S.hover_win;
         if (target)

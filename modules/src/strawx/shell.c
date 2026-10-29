@@ -19,15 +19,17 @@ static uint64_t shell_apps_checked_ms;
 #define ACCENT            (sx_theme->accent)
 #define MENU_BG           (sx_theme->bg)
 
-#define MENU_W            300
+#define MENU_COLS         4
+#define MENU_TILE_W       84
+#define MENU_TILE_H       80
 #define MENU_HEADER_H     64
-#define MENU_ITEM_H       54
-#define MENU_PAD          8
+#define MENU_PAD          10
+#define MENU_MARGIN       8
 
 #define DESK_CELL_W       96
 #define DESK_CELL_H       96
 #define DESK_ICON         52
-#define MENU_ICON         36
+#define MENU_ICON         40
 
 #define PANEL_START_W     40
 #define PANEL_BTN_MAX_W   200
@@ -133,6 +135,7 @@ static void shell_load_apps(void)
     S.desktop_selected = -1;
     S.desktop_hover = -1;
     S.menu_hover = -1;
+    S.menu_scroll = 0;
 }
 
 static void draw_app_icon(SxCanvas *c, const ShellApp *app, const SxImage *icon, int x, int y, int size)
@@ -372,6 +375,7 @@ static void shell_panel_click(int index)
     {
         S.menu_open = !S.menu_open;
         S.menu_hover = -1;
+        S.menu_scroll = 0;
         damage_add(menu_rect());
         damage_add(panel_start_rect());
         return;
@@ -401,16 +405,62 @@ static void shell_panel_click(int index)
     }
 }
 
+static int menu_cols(void)
+{
+    int fit = (S.width - MENU_MARGIN * 2 - MENU_PAD * 2) / MENU_TILE_W;
+    int cols = MENU_COLS < fit ? MENU_COLS : fit;
+    if (cols > shell_app_count)
+        cols = shell_app_count;
+    return cols < 1 ? 1 : cols;
+}
+
+static int menu_content_h(void)
+{
+    int cols = menu_cols();
+    return (shell_app_count + cols - 1) / cols * MENU_TILE_H;
+}
+
+// The menu grows with the app count until it reaches the top of the screen, then scrolls.
 static SxRect menu_rect(void)
 {
-    int h = MENU_HEADER_H + shell_app_count * MENU_ITEM_H + MENU_PAD * 2;
-    return sx_rect(8, S.height - PANEL_H - h - 8 + menu_slide_offset(), MENU_W, h);
+    int w = menu_cols() * MENU_TILE_W + MENU_PAD * 2;
+    int h = MENU_HEADER_H + menu_content_h() + MENU_PAD * 2;
+    int max_h = S.height - PANEL_H - MENU_MARGIN * 2;
+    if (h > max_h)
+        h = max_h;
+    return sx_rect(MENU_MARGIN, S.height - PANEL_H - h - MENU_MARGIN + menu_slide_offset(), w, h);
+}
+
+static SxRect menu_content_rect(void)
+{
+    SxRect m = menu_rect();
+    return sx_rect(m.x, m.y + MENU_HEADER_H, m.w, m.h - MENU_HEADER_H);
+}
+
+static int menu_max_scroll(void)
+{
+    int over = menu_content_h() + MENU_PAD * 2 - menu_content_rect().h;
+    return over > 0 ? over : 0;
+}
+
+static void menu_scroll_by(int dy)
+{
+    int s = S.menu_scroll + dy;
+    int max = menu_max_scroll();
+    if (s > max) s = max;
+    if (s < 0) s = 0;
+    if (s == S.menu_scroll)
+        return;
+    S.menu_scroll = s;
+    damage_add(menu_rect());
 }
 
 static SxRect menu_item_rect(int i)
 {
-    SxRect m = menu_rect();
-    return sx_rect(m.x + MENU_PAD, m.y + MENU_HEADER_H + MENU_PAD + i * MENU_ITEM_H, m.w - MENU_PAD * 2, MENU_ITEM_H);
+    SxRect m = menu_content_rect();
+    int cols = menu_cols();
+    return sx_rect(m.x + MENU_PAD + (i % cols) * MENU_TILE_W,
+                   m.y + MENU_PAD + (i / cols) * MENU_TILE_H - S.menu_scroll, MENU_TILE_W, MENU_TILE_H);
 }
 
 static SxRect menu_outer_rect(void)
@@ -421,10 +471,29 @@ static SxRect menu_outer_rect(void)
 
 static int menu_hit(int x, int y)
 {
+    if (!sx_rect_contains(menu_content_rect(), x, y))
+        return -1;
     for (int i = 0; i < shell_app_count; i++)
         if (sx_rect_contains(menu_item_rect(i), x, y))
             return i;
     return -1;
+}
+
+static void draw_text_fit(SxCanvas *c, const SxFont *font, SxRect box, int y, const char *text, uint32_t color)
+{
+    char buf[128];
+    int len = (int)strlen(text);
+    if (len > (int)sizeof(buf) - 4)
+        len = (int)sizeof(buf) - 4;
+    memcpy(buf, text, (size_t)len);
+    buf[len] = '\0';
+    if (sx_text_width(font, buf) > box.w)
+    {
+        while (len > 0 && sx_text_width_n(font, buf, len) + sx_text_width(font, "...") > box.w)
+            len--;
+        memcpy(buf + len, "...", 4);
+    }
+    sx_draw_text(c, font, box.x + (box.w - sx_text_width(font, buf)) / 2, y, buf, color);
 }
 
 static void shell_draw_menu(SxCanvas *c)
@@ -437,22 +506,48 @@ static void shell_draw_menu(SxCanvas *c)
     sx_fill_rounded_rect(c, m.x, m.y, m.w, m.h, 14, MENU_BG);
     sx_draw_rounded_rect(c, m.x, m.y, m.w, m.h, 14, SX_RGBA(255, 255, 255, 26));
 
+    // The header doubles as a tooltip for the hovered app.
+    const ShellApp *hot = S.menu_hover >= 0 && S.menu_hover < shell_app_count ? &shell_apps[S.menu_hover] : NULL;
+    SxRect head = sx_rect(m.x + 62, m.y, m.w - 62 - 16, MENU_HEADER_H);
+    SxRect old = c->clip;
+    sx_canvas_set_clip(c, sx_rect_intersect(old, head));
+    sx_draw_text(c, &sx_font_sans_bold, head.x, m.y + 14, hot ? hot->entry.name : "StrawOS", PANEL_TEXT);
+    sx_draw_text(c, &sx_font_sans_small, head.x, m.y + 34, hot ? hot->entry.comment : "Applications", PANEL_TEXT_DIM);
+    c->clip = old;
     draw_logo(c, m.x + 18, m.y + 16, 32);
-    sx_draw_text(c, &sx_font_sans_bold, m.x + 62, m.y + 14, "StrawOS", PANEL_TEXT);
-    sx_draw_text(c, &sx_font_sans_small, m.x + 62, m.y + 32, "Applications", PANEL_TEXT_DIM);
     sx_fill_rect(c, m.x + 16, m.y + MENU_HEADER_H - 1, m.w - 32, 1, SX_RGBA(255, 255, 255, 18));
+
+    SxRect content = menu_content_rect();
+    content = sx_rect(content.x, content.y, content.w, content.h - 6);
+    sx_canvas_set_clip(c, sx_rect_intersect(old, content));
 
     for (int i = 0; i < shell_app_count; i++)
     {
         SxRect r = menu_item_rect(i);
+        if (sx_rect_empty(sx_rect_intersect(r, c->clip)))
+            continue;
+
+        SxRect tile = sx_rect(r.x + 3, r.y + 3, r.w - 6, r.h - 6);
         float hover = fade_level(FADE_MENU, i);
         if (hover > 0.0f)
-            sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 10, SX_RGBA(255, 255, 255, (uint32_t)(20 * hover)));
+            sx_fill_rounded_rect(c, tile.x, tile.y, tile.w, tile.h, 10, SX_RGBA(255, 255, 255, (uint32_t)(20 * hover)));
 
-        draw_app_icon(c, &shell_apps[i], shell_apps[i].icon_menu, r.x + 10, r.y + (r.h - MENU_ICON) / 2, MENU_ICON);
-        sx_draw_text(c, &sx_font_sans_bold, r.x + 58, r.y + 8, shell_apps[i].entry.name, PANEL_TEXT);
-        sx_draw_text(c, &sx_font_sans_small, r.x + 58, r.y + 28, shell_apps[i].entry.comment, PANEL_TEXT_DIM);
+        draw_app_icon(c, &shell_apps[i], shell_apps[i].icon_menu, r.x + (r.w - MENU_ICON) / 2, r.y + 10, MENU_ICON);
+        draw_text_fit(c, &sx_font_sans_small, sx_rect(tile.x + 4, tile.y, tile.w - 8, tile.h), r.y + 10 + MENU_ICON + 6,
+                      shell_apps[i].entry.name, PANEL_TEXT);
     }
+
+    int max_scroll = menu_max_scroll();
+    if (max_scroll > 0)
+    {
+        int track = content.h - 8;
+        int thumb = track * content.h / (content.h + max_scroll);
+        if (thumb < 24)
+            thumb = 24;
+        int ty = content.y + 4 + (track - thumb) * S.menu_scroll / max_scroll;
+        sx_fill_rounded_rect(c, m.x + m.w - 7, ty, 3, thumb, 1, SX_RGBA(255, 255, 255, 60));
+    }
+    c->clip = old;
 }
 
 static void shell_close_menu(void)

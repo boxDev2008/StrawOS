@@ -205,6 +205,7 @@ static struct
 
     bool          menu_open;
     int           menu_hover;
+    int           menu_scroll;
     int           panel_hover;
     int           desktop_selected;
     int           desktop_hover;
