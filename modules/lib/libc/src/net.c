@@ -40,32 +40,13 @@ static bool parse_ip(const char *s, uint8_t out[4])
     }
 }
 
+_Static_assert(sizeof(struct net_info) == 17, "net_info must match the kernel's NetInfo");
+
 int net_info(struct net_info *out)
 {
     memset(out, 0, sizeof(*out));
-    char buf[256];
-    if (read_device_text("/dev/net", buf, sizeof(buf)) != 0)
+    if (read_device("/dev/net", out, sizeof(*out)) != sizeof(*out))
         return -1;
-
-    const char *keys[4] = { "ip: ", "gateway: ", "netmask: ", "dns: " };
-    uint8_t *dst[4] = { out->ip, out->gateway, out->netmask, out->dns };
-    for (int i = 0; i < 4; i++)
-    {
-        const char *p = strstr(buf, keys[i]);
-        if (!p)
-            continue;
-        p += strlen(keys[i]);
-        char tmp[20];
-        int n = 0;
-        while (p[n] && p[n] != '\n' && n < 19)
-        {
-            tmp[n] = p[n];
-            n++;
-        }
-        tmp[n] = '\0';
-        parse_ip(tmp, dst[i]);
-    }
-    out->up = strstr(buf, "status: up") != NULL;
     return 0;
 }
 

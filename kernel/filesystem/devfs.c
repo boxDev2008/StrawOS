@@ -130,159 +130,97 @@ static int devfs_mouse_ioctl(VFile *file, uint64_t request, void *arg)
     return -1;
 }
 
-typedef struct
-{
-    char  *data;
-    size_t cap;
-    size_t len;
-}
-DevfsText;
+_Static_assert(CPU_MAX <= DEVFS_CPUINFO_MAX_CPUS, "CpuInfo cannot hold every CPU");
+_Static_assert(TASK_NAME_MAX == DEVFS_TASK_NAME_MAX, "TaskInfo name must match Task name");
+_Static_assert(sizeof(TaskInfo) == 96, "TaskInfo layout is shared with libc");
+_Static_assert(sizeof(NetInfo) == 17, "NetInfo layout is shared with libc");
+_Static_assert(sizeof(RtcTime) == 8, "RtcTime layout is shared with libc");
 
-#define DEVFS_TEXT(name, size) \
-    static char name##_data[size]; \
-    DevfsText name = { name##_data, sizeof(name##_data), 0 }
-
-static void devfs_text_str(DevfsText *t, const char *s)
+static ssize_t devfs_record_read(VFile *file, const void *data, size_t size, void *buf, size_t count)
 {
-    while (*s && t->len < t->cap - 1)
-        t->data[t->len++] = *s++;
-}
-
-static void devfs_text_uint(DevfsText *t, uint64_t v, int min_digits)
-{
-    char digits[24];
-    int n = 0;
-    do
-    {
-        digits[n++] = (char)('0' + v % 10);
-        v /= 10;
-    }
-    while (v && n < (int)sizeof(digits));
-    while (n < min_digits && n < (int)sizeof(digits))
-        digits[n++] = '0';
-    while (n > 0 && t->len < t->cap - 1)
-        t->data[t->len++] = digits[--n];
-}
-
-static ssize_t devfs_text_read(VFile *file, const DevfsText *t, void *buf, size_t count)
-{
-    if (file->offset >= t->len)
+    if (file->offset >= size)
         return 0;
-    size_t n = MIN(count, t->len - file->offset);
-    memcpy(buf, t->data + file->offset, n);
+    size_t n = MIN(count, size - file->offset);
+    memcpy(buf, (const uint8_t *)data + file->offset, n);
     file->offset += n;
     return (ssize_t)n;
 }
 
 static ssize_t devfs_meminfo_read(VFile *file, void *buf, size_t count)
 {
-    uint64_t total_kb = pmm_total_page_count() * (PAGE_SIZE / 1024);
-    uint64_t free_kb = pmm_free_page_count() * (PAGE_SIZE / 1024);
-
-    DEVFS_TEXT(t, 4096);
-    devfs_text_str(&t, "total_kb: ");
-    devfs_text_uint(&t, total_kb, 1);
-    devfs_text_str(&t, "\nfree_kb: ");
-    devfs_text_uint(&t, free_kb, 1);
-    devfs_text_str(&t, "\nused_kb: ");
-    devfs_text_uint(&t, total_kb - free_kb, 1);
-    devfs_text_str(&t, "\npage_size: ");
-    devfs_text_uint(&t, PAGE_SIZE, 1);
-    devfs_text_str(&t, "\n");
-    return devfs_text_read(file, &t, buf, count);
+    MemInfo info = {
+        .total_pages = pmm_total_page_count(),
+        .free_pages  = pmm_free_page_count(),
+        .page_size   = PAGE_SIZE,
+    };
+    return devfs_record_read(file, &info, sizeof(info), buf, count);
 }
 
 static ssize_t devfs_cpuinfo_read(VFile *file, void *buf, size_t count)
 {
-    uint32_t cpus = smp_cpu_count();
+    CpuInfo info = { .cpus = smp_cpu_count() };
 
-    DEVFS_TEXT(t, 4096);
-    devfs_text_str(&t, "cpus: ");
-    devfs_text_uint(&t, cpus, 1);
-    devfs_text_str(&t, "\nhz: ");
-    devfs_text_uint(&t, SCHEDULER_HZ, 1);
-    devfs_text_str(&t, "\n");
-
-    for (uint32_t i = 0; i < cpus; i++)
+    for (uint32_t i = 0; i < info.cpus; i++)
     {
-        uint64_t total, busy;
-        smp_cpu_ticks(i, &total, &busy);
-        devfs_text_str(&t, "cpu");
-        devfs_text_uint(&t, i, 1);
-        devfs_text_str(&t, "_total: ");
-        devfs_text_uint(&t, total, 1);
-        devfs_text_str(&t, "\ncpu");
-        devfs_text_uint(&t, i, 1);
-        devfs_text_str(&t, "_busy: ");
-        devfs_text_uint(&t, busy, 1);
-        devfs_text_str(&t, "\n");
+        smp_cpu_ticks(i, &info.cpu_total_ticks[i], &info.cpu_busy_ticks[i]);
+        info.total_ticks += info.cpu_total_ticks[i];
+        info.busy_ticks += info.cpu_busy_ticks[i];
     }
-    return devfs_text_read(file, &t, buf, count);
+    return devfs_record_read(file, &info, sizeof(info), buf, count);
 }
+
+typedef struct
+{
+    TaskInfo *out;
+    size_t    skip;
+    size_t    max;
+    size_t    written;
+}
+DevfsTaskCursor;
 
 static void devfs_tasks_visit(Task *task, void *ctx)
 {
-    static const char *states[] = { " Q ", " R ", " S ", " D " };
-    DevfsText *t = ctx;
+    DevfsTaskCursor *cur = ctx;
+    if (cur->skip)
+    {
+        cur->skip--;
+        return;
+    }
+    if (cur->written == cur->max)
+        return;
 
     uint64_t pages = task->stack_pages + user_pages_count(task);
     if (task->owns_image)
         pages += task->image.page_count;
 
-    devfs_text_uint(t, task->pid, 1);
-    devfs_text_str(t, states[task->state]);
-    devfs_text_str(t, task->owns_image ? "p " : "k ");
-    devfs_text_uint(t, task->cpu_ticks, 1);
-    devfs_text_str(t, " ");
-    devfs_text_uint(t, pages * (PAGE_SIZE / 1024), 1);
-    devfs_text_str(t, " ");
-    devfs_text_str(t, task->name);
-    devfs_text_str(t, "\n");
+    TaskInfo *info = &cur->out[cur->written++];
+    memset(info, 0, sizeof(*info));
+    info->pid = task->pid;
+    info->state = (uint8_t)task->state;
+    info->kernel = !task->owns_image;
+    info->cpu_ticks = task->cpu_ticks;
+    info->mem_kb = pages * (PAGE_SIZE / 1024);
+    memcpy(info->name, task->name, DEVFS_TASK_NAME_MAX);
 }
 
 static ssize_t devfs_tasks_read(VFile *file, void *buf, size_t count)
 {
-    DEVFS_TEXT(t, 128 * 1024);
-    task_for_each(devfs_tasks_visit, &t);
-    return devfs_text_read(file, &t, buf, count);
+    DevfsTaskCursor cur = {
+        .out  = buf,
+        .skip = file->offset / sizeof(TaskInfo),
+        .max  = count / sizeof(TaskInfo),
+    };
+    task_for_each(devfs_tasks_visit, &cur);
+    file->offset += cur.written * sizeof(TaskInfo);
+    return (ssize_t)(cur.written * sizeof(TaskInfo));
 }
-
-static const char *devfs_weekdays[7] = {
-    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
-};
 
 static ssize_t devfs_rtc_read(VFile *file, void *buf, size_t count)
 {
     RtcTime now;
     if (rtc_read(&now) != 0)
         return -1;
-
-    DEVFS_TEXT(t, 4096);
-    devfs_text_uint(&t, now.year, 4);
-    devfs_text_str(&t, "-");
-    devfs_text_uint(&t, now.month, 2);
-    devfs_text_str(&t, "-");
-    devfs_text_uint(&t, now.day, 2);
-    devfs_text_str(&t, " ");
-    devfs_text_uint(&t, now.hour, 2);
-    devfs_text_str(&t, ":");
-    devfs_text_uint(&t, now.minute, 2);
-    devfs_text_str(&t, ":");
-    devfs_text_uint(&t, now.second, 2);
-    devfs_text_str(&t, " ");
-    devfs_text_str(&t, devfs_weekdays[now.weekday % 7]);
-    devfs_text_str(&t, "\n");
-    return devfs_text_read(file, &t, buf, count);
-}
-
-static void devfs_text_ip(DevfsText *t, Ipv4Addr ip)
-{
-    for (int i = 0; i < 4; i++)
-    {
-        devfs_text_uint(t, ip.bytes[i], 1);
-        if (i < 3)
-            devfs_text_str(t, ".");
-    }
+    return devfs_record_read(file, &now, sizeof(now), buf, count);
 }
 
 static ssize_t devfs_net_read(VFile *file, void *buf, size_t count)
@@ -290,19 +228,12 @@ static ssize_t devfs_net_read(VFile *file, void *buf, size_t count)
     Ipv4Addr ip, gw, mask, dns;
     net_status(&ip, &gw, &mask, &dns);
 
-    DEVFS_TEXT(t, 4096);
-    devfs_text_str(&t, "status: ");
-    devfs_text_str(&t, net_is_up() ? "up" : "down");
-    devfs_text_str(&t, "\nip: ");
-    devfs_text_ip(&t, ip);
-    devfs_text_str(&t, "\ngateway: ");
-    devfs_text_ip(&t, gw);
-    devfs_text_str(&t, "\nnetmask: ");
-    devfs_text_ip(&t, mask);
-    devfs_text_str(&t, "\ndns: ");
-    devfs_text_ip(&t, dns);
-    devfs_text_str(&t, "\n");
-    return devfs_text_read(file, &t, buf, count);
+    NetInfo info = { .up = net_is_up() };
+    memcpy(info.ip, ip.bytes, 4);
+    memcpy(info.gateway, gw.bytes, 4);
+    memcpy(info.netmask, mask.bytes, 4);
+    memcpy(info.dns, dns.bytes, 4);
+    return devfs_record_read(file, &info, sizeof(info), buf, count);
 }
 
 static VNode *devfs_add_child(VNode *dir, const char *name, VFileOps *file_ops, void *private_data)

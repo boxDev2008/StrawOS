@@ -8,178 +8,56 @@ void yield(void)
     kcall(KCALL_YIELD, 0, 0, 0, 0);
 }
 
-static int read_device_text(const char *path, char *buf, size_t size)
+_Static_assert(sizeof(struct rtc_time) == 8, "rtc_time must match the kernel's RtcTime");
+_Static_assert(sizeof(struct taskinfo) == 96, "taskinfo must match the kernel's TaskInfo");
+
+static ssize_t read_device(const char *path, void *buf, size_t size)
 {
     int fd = open(path, O_RDONLY);
     if (fd < 0)
         return -1;
 
     size_t len = 0;
-    for (;;)
+    while (len < size)
     {
-        ssize_t n = read(fd, buf + len, size - 1 - len);
+        ssize_t n = read(fd, (char *)buf + len, size - len);
         if (n <= 0)
             break;
         len += (size_t)n;
-        if (len == size - 1)
-            break;
     }
     close(fd);
-    buf[len] = '\0';
-    return len > 0 ? 0 : -1;
-}
-
-static const char *parse_uint(const char *s, uint64_t *out)
-{
-    uint64_t v = 0;
-    if (*s < '0' || *s > '9')
-        return NULL;
-    while (*s >= '0' && *s <= '9')
-        v = v * 10 + (uint64_t)(*s++ - '0');
-    *out = v;
-    return s;
-}
-
-static bool text_field(const char *text, const char *key, uint64_t *out)
-{
-    size_t key_len = strlen(key);
-    for (const char *line = text; line && *line; )
-    {
-        if (strncmp(line, key, key_len) == 0 && line[key_len] == ':')
-        {
-            const char *v = line + key_len + 1;
-            while (*v == ' ')
-                v++;
-            return parse_uint(v, out) != NULL;
-        }
-        line = strchr(line, '\n');
-        if (line)
-            line++;
-    }
-    return false;
+    return (ssize_t)len;
 }
 
 int rtc_time(struct rtc_time *out)
 {
-    static const char *weekdays[7] = {
-        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
-    };
-
-    char buf[64];
-    if (!out || read_device_text("/dev/rtc", buf, sizeof(buf)) != 0)
+    if (!out || read_device("/dev/rtc", out, sizeof(*out)) != sizeof(*out))
         return -1;
-
-    uint64_t f[6];
-    const char *p = buf;
-    const char seps[6] = { '-', '-', ' ', ':', ':', ' ' };
-    for (int i = 0; i < 6; i++)
-    {
-        p = parse_uint(p, &f[i]);
-        if (!p || *p != seps[i])
-            return -1;
-        p++;
-    }
-
-    out->year = (uint16_t)f[0];
-    out->month = (uint8_t)f[1];
-    out->day = (uint8_t)f[2];
-    out->hour = (uint8_t)f[3];
-    out->minute = (uint8_t)f[4];
-    out->second = (uint8_t)f[5];
-    out->weekday = 0;
-    for (int i = 0; i < 7; i++)
-        if (strncmp(p, weekdays[i], strlen(weekdays[i])) == 0)
-            out->weekday = (uint8_t)i;
     return 0;
 }
 
 int meminfo(struct meminfo *out)
 {
-    char buf[256];
-    if (!out || read_device_text("/dev/meminfo", buf, sizeof(buf)) != 0)
+    if (!out || read_device("/dev/meminfo", out, sizeof(*out)) != sizeof(*out) || out->page_size == 0)
         return -1;
-
-    uint64_t total_kb, free_kb, page_size;
-    if (!text_field(buf, "total_kb", &total_kb) || !text_field(buf, "free_kb", &free_kb) ||
-        !text_field(buf, "page_size", &page_size) || page_size == 0)
-        return -1;
-
-    out->page_size = page_size;
-    out->total_pages = total_kb * 1024 / page_size;
-    out->free_pages = free_kb * 1024 / page_size;
     return 0;
 }
 
 int cpuinfo(struct cpuinfo *out)
 {
-    static char buf[4096];
-    if (!out || read_device_text("/dev/cpuinfo", buf, sizeof(buf)) != 0)
+    if (!out || read_device("/dev/cpuinfo", out, sizeof(*out)) != sizeof(*out) || out->cpus == 0)
         return -1;
-
-    if (!text_field(buf, "cpus", &out->cpus) || out->cpus == 0)
-        return -1;
-    if (out->cpus > CPUINFO_MAX_CPUS)
-        out->cpus = CPUINFO_MAX_CPUS;
-
-    out->total_ticks = 0;
-    out->busy_ticks = 0;
-    for (uint64_t i = 0; i < out->cpus; i++)
-    {
-        char key[32];
-        snprintf(key, sizeof(key), "cpu%llu_total", (unsigned long long)i);
-        if (!text_field(buf, key, &out->cpu_total_ticks[i]))
-            return -1;
-        snprintf(key, sizeof(key), "cpu%llu_busy", (unsigned long long)i);
-        if (!text_field(buf, key, &out->cpu_busy_ticks[i]))
-            return -1;
-        out->total_ticks += out->cpu_total_ticks[i];
-        out->busy_ticks += out->cpu_busy_ticks[i];
-    }
     return 0;
 }
 
 int tasklist(struct taskinfo *out, int max)
 {
-    static char buf[128 * 1024];
-    if (!out || max <= 0 || read_device_text("/dev/tasks", buf, sizeof(buf)) != 0)
+    if (!out || max <= 0)
         return -1;
-
-    int n = 0;
-    for (const char *line = buf; *line && n < max; )
-    {
-        struct taskinfo *t = &out[n];
-        const char *p = parse_uint(line, &t->pid);
-        if (p && p[0] == ' ' && p[1] && p[2] == ' ' && p[3] && p[4] == ' ')
-        {
-            switch (p[1])
-            {
-                case 'R': t->state = TASK_STATE_RUNNING; break;
-                case 'Q': t->state = TASK_STATE_READY; break;
-                case 'S': t->state = TASK_STATE_SLEEPING; break;
-                default:  t->state = TASK_STATE_UNKNOWN; break;
-            }
-            t->kernel = p[3] == 'k';
-            p = parse_uint(p + 5, &t->cpu_ticks);
-            if (p && *p == ' ')
-                p = parse_uint(p + 1, &t->mem_kb);
-            if (p && *p == ' ')
-            {
-                p++;
-                size_t len = strcspn(p, "\n");
-                if (len >= TASKINFO_NAME_MAX)
-                    len = TASKINFO_NAME_MAX - 1;
-                memcpy(t->name, p, len);
-                t->name[len] = '\0';
-                n++;
-            }
-        }
-
-        line = strchr(line, '\n');
-        if (!line)
-            break;
-        line++;
-    }
-    return n;
+    ssize_t n = read_device("/dev/tasks", out, (size_t)max * sizeof(*out));
+    if (n < 0)
+        return -1;
+    return (int)(n / (ssize_t)sizeof(*out));
 }
 
 static int64_t days_from_civil(int64_t y, int m, int d)

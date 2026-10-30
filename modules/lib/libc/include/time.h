@@ -54,10 +54,9 @@ struct cpuinfo
 
 enum task_state
 {
-    TASK_STATE_RUNNING  = 0,
-    TASK_STATE_READY    = 1,
-    TASK_STATE_SLEEPING = 2,
-    TASK_STATE_UNKNOWN  = 3
+    TASK_STATE_READY    = 0,
+    TASK_STATE_RUNNING  = 1,
+    TASK_STATE_SLEEPING = 2
 };
 
 struct taskinfo
@@ -65,6 +64,7 @@ struct taskinfo
     uint64_t pid;
     uint8_t  state;
     uint8_t  kernel;
+    uint8_t  reserved[6];
     uint64_t cpu_ticks;
     uint64_t mem_kb;
     char     name[TASKINFO_NAME_MAX];
