@@ -47,6 +47,8 @@ struct Task
     bool       detached;
     bool       kill_pending;
 
+    uint64_t   cpu_ticks;
+
     void      *stack_base;
     size_t     stack_pages;
 
@@ -58,6 +60,7 @@ struct Task
     uint8_t    fpu_state[FPU_STATE_SIZE] ALIGN(16);
 
     Task      *next;
+    Task      *list_next;
 };
 
 void task_init(void);
@@ -89,6 +92,7 @@ Task *task_exec_elf(const char *path, char *const argv[]);
 
 void fs_release_task(Task *t);
 void user_pages_release_task(Task *t);
+uint64_t user_pages_count(Task *t);
 void task_forget_fd(int fd);
 
 uint64_t sys_spawn(const char *path, char *const argv[]);
@@ -97,3 +101,6 @@ int64_t  sys_getcwd(char *buf, size_t size);
 int64_t  sys_kill(uint64_t pid);
 int64_t  sys_task_status(uint64_t pid, int *code);
 uint64_t sys_getpid(void);
+
+typedef void (*TaskVisitor)(Task *t, void *ctx);
+void task_for_each(TaskVisitor visit, void *ctx);

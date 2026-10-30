@@ -1,7 +1,5 @@
-#define TASK_MAX 1024
-
-static Task  task_pool[TASK_MAX] ALIGN(16);
-static bool  task_pool_used[TASK_MAX];
+static Task *task_list = NULL;
+static Task *kernel_task = NULL;
 
 #define TASK_IDLE_STACK_SIZE (64 * 1024)
 
@@ -45,30 +43,37 @@ __attribute__((naked)) static void task_switch_asm
 
 static void task_trampoline(void);
 
-static Task *task_alloc_slot(void)
+// fxsave/fxrstor fault unless fpu_state is 16-byte aligned, which kmalloc gives us
+// only while its header keeps the returned pointer on a 16-byte boundary.
+_Static_assert(sizeof(HeapBlockHeader) % 16 == 0, "kmalloc must return 16-byte aligned tasks");
+
+static Task *task_alloc(void)
 {
-    for (int i = 0; i < TASK_MAX; i++)
-    {
-        if (!task_pool_used[i])
-        {
-            task_pool_used[i] = true;
-            memset(&task_pool[i], 0, sizeof(Task));
-            return &task_pool[i];
-        }
-    }
-    return NULL;
+    Task *t = kmalloc(sizeof(Task));
+    if (!t)
+        return NULL;
+    memset(t, 0, sizeof(Task));
+
+    uint64_t flags = irq_save();
+    t->list_next = task_list;
+    task_list = t;
+    irq_restore(flags);
+    return t;
 }
 
-static void task_free_slot(Task *t)
+static void task_free(Task *t)
 {
-    for (int i = 0; i < TASK_MAX; i++)
+    uint64_t flags = irq_save();
+    for (Task **link = &task_list; *link; link = &(*link)->list_next)
     {
-        if (&task_pool[i] == t)
+        if (*link == t)
         {
-            task_pool_used[i] = false;
-            return;
+            *link = t->list_next;
+            break;
         }
     }
+    irq_restore(flags);
+    kfree(t);
 }
 
 static void run_queue_push(Task *t)
@@ -118,10 +123,8 @@ static void task_fpu_init(Task *t)
 
 void task_init(void)
 {
-    memset(task_pool, 0, sizeof(task_pool));
-    memset(task_pool_used, 0, sizeof(task_pool_used));
-
-    Task *idle = task_alloc_slot();
+    Task *idle = task_alloc();
+    kernel_task = idle;
     strncpy(idle->name, "kernel", TASK_NAME_MAX - 1);
     idle->state = TASK_RUNNING;
     idle->saved_rsp = 0;
@@ -135,7 +138,7 @@ void task_init(void)
 
 Task *task_create_idle(void)
 {
-    Task *t = task_alloc_slot();
+    Task *t = task_alloc();
     if (!t)
         return NULL;
 
@@ -143,7 +146,7 @@ Task *task_create_idle(void)
     void *stack = pmm_alloc_pages(pages);
     if (!stack)
     {
-        task_free_slot(t);
+        task_free(t);
         return NULL;
     }
 
@@ -244,7 +247,7 @@ static void task_args_free(TaskArgs *ta)
 
 static Task *task_new_common(const char *name)
 {
-    Task *t = task_alloc_slot();
+    Task *t = task_alloc();
     if (!t)
     {
         kprintf("task: out of task slots\n");
@@ -256,7 +259,7 @@ static Task *task_new_common(const char *name)
     if (!stack)
     {
         kprintf("task: out of memory for stack\n");
-        task_free_slot(t);
+        task_free(t);
         return NULL;
     }
 
@@ -400,7 +403,10 @@ void task_scheduler_tick(void)
     Cpu *cpu = this_cpu();
     cpu->ticks++;
     if (cpu->current != cpu->idle)
+    {
         cpu->busy_ticks++;
+        cpu->current->cpu_ticks++;
+    }
 
     if (cpu_is_bsp())
     {
@@ -644,7 +650,7 @@ int task_kill(Task *t)
     }
 
     run_queue_remove(t);
-    task_free_slot(t);
+    task_free(t);
     irq_restore(flags);
 
     return true;
@@ -667,23 +673,26 @@ int task_wait(Task *t, uint32_t flags)
 }
 void task_forget_fd(int fd)
 {
-    for (int i = 0; i < TASK_MAX; i++)
-    {
-        if (!task_pool_used[i])
-            continue;
+    for (Task *t = task_list; t; t = t->list_next)
         for (int k = 0; k < 3; k++)
-            if (task_pool[i].stdio[k] == fd)
-                task_pool[i].stdio[k] = -1;
-    }
+            if (t->stdio[k] == fd)
+                t->stdio[k] = -1;
+}
+
+void task_for_each(TaskVisitor visit, void *ctx)
+{
+    for (Task *t = task_list; t; t = t->list_next)
+        if (t->pid != 0 && t->state != TASK_DEAD)
+            visit(t, ctx);
 }
 
 static Task *task_find(uint64_t pid)
 {
     if (pid == 0)
         return NULL;
-    for (int i = 0; i < TASK_MAX; i++)
-        if (task_pool_used[i] && task_pool[i].pid == pid)
-            return &task_pool[i];
+    for (Task *t = task_list; t; t = t->list_next)
+        if (t->pid == pid)
+            return t;
     return NULL;
 }
 
@@ -720,7 +729,7 @@ int64_t sys_getcwd(char *buf, size_t size)
 int64_t sys_kill(uint64_t pid)
 {
     Task *t = task_find(pid);
-    if (!t || t == &task_pool[0])
+    if (!t || t == kernel_task)
         return -1;
     return task_kill(t) ? 0 : -1;
 }

@@ -94,3 +94,14 @@ void user_pages_release_task(Task *t)
 
     irq_restore(flags);
 }
+
+uint64_t user_pages_count(Task *t)
+{
+    uint64_t flags = irq_save();
+    uint64_t pages = 0;
+    for (uint64_t i = 0; i < user_run_count; i++)
+        if (user_runs[i].owner == t)
+            pages += user_runs[i].count;
+    irq_restore(flags);
+    return pages;
+}

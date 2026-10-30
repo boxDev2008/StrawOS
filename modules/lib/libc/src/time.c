@@ -138,6 +138,50 @@ int cpuinfo(struct cpuinfo *out)
     return 0;
 }
 
+int tasklist(struct taskinfo *out, int max)
+{
+    static char buf[128 * 1024];
+    if (!out || max <= 0 || read_device_text("/dev/tasks", buf, sizeof(buf)) != 0)
+        return -1;
+
+    int n = 0;
+    for (const char *line = buf; *line && n < max; )
+    {
+        struct taskinfo *t = &out[n];
+        const char *p = parse_uint(line, &t->pid);
+        if (p && p[0] == ' ' && p[1] && p[2] == ' ' && p[3] && p[4] == ' ')
+        {
+            switch (p[1])
+            {
+                case 'R': t->state = TASK_STATE_RUNNING; break;
+                case 'Q': t->state = TASK_STATE_READY; break;
+                case 'S': t->state = TASK_STATE_SLEEPING; break;
+                default:  t->state = TASK_STATE_UNKNOWN; break;
+            }
+            t->kernel = p[3] == 'k';
+            p = parse_uint(p + 5, &t->cpu_ticks);
+            if (p && *p == ' ')
+                p = parse_uint(p + 1, &t->mem_kb);
+            if (p && *p == ' ')
+            {
+                p++;
+                size_t len = strcspn(p, "\n");
+                if (len >= TASKINFO_NAME_MAX)
+                    len = TASKINFO_NAME_MAX - 1;
+                memcpy(t->name, p, len);
+                t->name[len] = '\0';
+                n++;
+            }
+        }
+
+        line = strchr(line, '\n');
+        if (!line)
+            break;
+        line++;
+    }
+    return n;
+}
+
 static int64_t days_from_civil(int64_t y, int m, int d)
 {
     y -= m <= 2;

@@ -50,10 +50,31 @@ struct cpuinfo
     uint64_t cpu_busy_ticks[CPUINFO_MAX_CPUS];
 };
 
+#define TASKINFO_NAME_MAX 64
+
+enum task_state
+{
+    TASK_STATE_RUNNING  = 0,
+    TASK_STATE_READY    = 1,
+    TASK_STATE_SLEEPING = 2,
+    TASK_STATE_UNKNOWN  = 3
+};
+
+struct taskinfo
+{
+    uint64_t pid;
+    uint8_t  state;
+    uint8_t  kernel;
+    uint64_t cpu_ticks;
+    uint64_t mem_kb;
+    char     name[TASKINFO_NAME_MAX];
+};
+
 uint64_t uptime_ms(void);
 int rtc_time(struct rtc_time *out);
 int meminfo(struct meminfo *out);
 int cpuinfo(struct cpuinfo *out);
+int tasklist(struct taskinfo *out, int max);
 void yield(void);
 
 time_t time(time_t *out);
