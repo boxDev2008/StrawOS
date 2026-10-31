@@ -6,9 +6,9 @@
 #define COLOR_FRAME_BORDER    SX_RGBA(255, 255, 255, 30)
 #define COLOR_CLOSE_HOVER     (sx_theme->red)
 
-#define TB_BUTTON_W 30
+#define TB_BUTTON_W 24
 #define TB_BUTTON_H 24
-#define TB_BUTTON_GAP 2
+#define TB_BUTTON_GAP 6
 
 static SxRect screen_rect(void)
 {
@@ -92,7 +92,7 @@ static SxRect window_outer_rect(Window *w)
 
 static bool window_visible(Window *w)
 {
-    return w && w->used && w->mapped && !w->hidden && !w->minimized;
+    return w && w->used && w->mapped && !w->hidden && !w->minimized && w->workspace == S.workspace;
 }
 
 static SxRect titlebar_button_rect(Window *w, HitZone zone)
@@ -109,7 +109,7 @@ static SxRect titlebar_button_rect(Window *w, HitZone zone)
     if (zone == HIT_MAXIMIZE && !(w->flags & SX_WINDOW_RESIZABLE))
         return sx_rect(0, 0, 0, 0);
 
-    int right = f.x + f.w - 6;
+    int right = f.x + f.w - 10;
     int bx = right - (index + 1) * TB_BUTTON_W - index * TB_BUTTON_GAP;
     int by = f.y + (TITLE_H - TB_BUTTON_H) / 2;
     return sx_rect(bx, by, TB_BUTTON_W, TB_BUTTON_H);
@@ -186,41 +186,49 @@ static void draw_titlebar_button(SxCanvas *c, Window *w, HitZone zone, bool acti
     bool pressed = hover && S.drag == DRAG_TITLE_BUTTON && S.drag_win == w && S.drag_zone == zone;
     float level = pressed ? 1.0f : fade_level(FADE_TITLE, ((int64_t)w->id << 4) | zone);
 
+    float cx = b.x + b.w * 0.5f;
+    float cy = b.y + b.h * 0.5f;
+    float radius = b.w * 0.5f;
+
     uint32_t icon = active ? sx_theme->text : sx_theme->text_dim;
+    sx_fill_circle(c, cx, cy, radius, SX_RGBA(255, 255, 255, active ? 16 : 8));
     if (level > 0.0f)
     {
         uint32_t a = (uint32_t)(level * 255.0f);
-        uint32_t bg;
         if (zone == HIT_CLOSE)
-            bg = ((pressed ? sx_darken(COLOR_CLOSE_HOVER, 40) : COLOR_CLOSE_HOVER) & 0xFFFFFFu) | (a << 24);
+        {
+            uint32_t red = pressed ? sx_darken(COLOR_CLOSE_HOVER, 40) : COLOR_CLOSE_HOVER;
+            sx_fill_circle(c, cx, cy, radius, (red & 0xFFFFFFu) | (a << 24));
+            icon = sx_mix(icon, SX_RGB(255, 255, 255), (int)a);
+        }
         else
-            bg = SX_RGBA(255, 255, 255, (uint32_t)((pressed ? 14 : 26) * level));
-        sx_fill_rounded_rect(c, b.x, b.y, b.w, b.h, 6, bg);
-        icon = sx_mix(icon, zone == HIT_CLOSE ? SX_RGB(255, 255, 255) : sx_theme->text, (int)a);
+        {
+            sx_fill_circle(c, cx, cy, radius, SX_RGBA(255, 255, 255, (uint32_t)((pressed ? 14 : 26) * level)));
+            icon = sx_mix(icon, sx_theme->text, (int)a);
+        }
     }
-
-    float cx = b.x + b.w * 0.5f;
-    float cy = b.y + b.h * 0.5f;
 
     switch (zone)
     {
         case HIT_CLOSE:
-            sx_draw_line(c, cx - 4.5f, cy - 4.5f, cx + 4.5f, cy + 4.5f, 1.4f, icon);
-            sx_draw_line(c, cx + 4.5f, cy - 4.5f, cx - 4.5f, cy + 4.5f, 1.4f, icon);
+            sx_draw_line(c, cx - 3.5f, cy - 3.5f, cx + 3.5f, cy + 3.5f, 1.5f, icon);
+            sx_draw_line(c, cx + 3.5f, cy - 3.5f, cx - 3.5f, cy + 3.5f, 1.5f, icon);
             break;
         case HIT_MINIMIZE:
-            sx_fill_rect(c, (int)(cx - 5), (int)cy, 10, 1, icon);
+            sx_draw_line(c, cx - 4.0f, cy + 0.5f, cx + 4.0f, cy + 0.5f, 1.5f, icon);
             break;
         case HIT_MAXIMIZE:
             if (w->maximized)
             {
-                sx_draw_rect(c, (int)(cx - 5), (int)(cy - 3), 8, 8, icon);
-                sx_fill_rect(c, (int)(cx - 2), (int)(cy - 6), 8, 1, icon);
-                sx_fill_rect(c, (int)(cx + 5), (int)(cy - 6), 1, 8, icon);
+                sx_draw_line(c, cx - 4.0f, cy - 1.0f, cx - 1.0f, cy - 1.0f, 1.5f, icon);
+                sx_draw_line(c, cx - 1.0f, cy - 1.0f, cx - 1.0f, cy - 4.0f, 1.5f, icon);
+                sx_draw_line(c, cx + 4.0f, cy + 1.0f, cx + 1.0f, cy + 1.0f, 1.5f, icon);
+                sx_draw_line(c, cx + 1.0f, cy + 1.0f, cx + 1.0f, cy + 4.0f, 1.5f, icon);
             }
             else
             {
-                sx_draw_rounded_rect(c, (int)(cx - 5), (int)(cy - 5), 10, 10, 2, icon);
+                sx_draw_line(c, cx - 4.0f, cy + 2.5f, cx, cy - 2.0f, 1.5f, icon);
+                sx_draw_line(c, cx, cy - 2.0f, cx + 4.0f, cy + 2.5f, 1.5f, icon);
             }
             break;
         default:
@@ -529,7 +537,8 @@ static void cursor_moved(void)
 }
 
 static void shell_draw_desktop(SxCanvas *c);
-static void shell_draw_panel(SxCanvas *c);
+static void shell_draw_bar(SxCanvas *c);
+static void shell_draw_dock(SxCanvas *c);
 static void shell_draw_menu(SxCanvas *c);
 
 static void flush_rect(SxRect r)
@@ -570,22 +579,37 @@ static void compose_rect(SxRect r)
 
     shell_draw_desktop(c);
 
-    for (int i = 0; i < S.zcount; i++)
+    // While a snap preview shows, the dragged window goes on top of it so it stays readable.
+    Window *lifted = S.snap_active && S.drag == DRAG_MOVE ? S.drag_win : NULL;
+    for (int layer = 0; layer < 2; layer++)
     {
-        Window *w = S.zorder[i];
-        if (!window_visible(w))
-            continue;
-        if (anim_draw_window(c, w))
-            continue;
-        if (sx_rect_empty(sx_rect_intersect(window_outer_rect(w), r)))
-            continue;
-        draw_window(c, w);
+        if (layer == 1 && S.snap_active && !sx_rect_empty(sx_rect_intersect(S.snap_rect, r)))
+        {
+            SxRect p = S.snap_rect;
+            sx_fill_rounded_rect(c, p.x, p.y, p.w, p.h, FRAME_RADIUS, SX_THEME_ACCENT_A(46));
+            sx_draw_rounded_rect(c, p.x, p.y, p.w, p.h, FRAME_RADIUS, SX_THEME_ACCENT_A(170));
+        }
+
+        for (int i = 0; i < S.zcount; i++)
+        {
+            Window *w = S.zorder[i];
+            if (!window_visible(w))
+                continue;
+            if ((w == lifted) != (layer == 1) || anim_draw_window(c, w))
+                continue;
+            if (sx_rect_empty(sx_rect_intersect(window_outer_rect(w), r)))
+                continue;
+            draw_window(c, w);
+        }
     }
 
-    if (!sx_rect_empty(sx_rect_intersect(panel_rect(), r)))
-        shell_draw_panel(c);
-
     anim_draw_ghosts(c);
+
+    if (!sx_rect_empty(sx_rect_intersect(bar_rect(), r)))
+        shell_draw_bar(c);
+
+    if (S.dock_level > 0.0f && !sx_rect_empty(sx_rect_intersect(dock_outer_rect(), r)))
+        shell_draw_dock(c);
 
     if (S.menu_level > 0.0f)
         draw_faded(c, menu_outer_rect(), shell_draw_menu, S.menu_level);

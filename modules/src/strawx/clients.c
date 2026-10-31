@@ -41,6 +41,23 @@ static void client_accept(void)
     }
 }
 
+// Remembers which program the client is, so the dock can show its windows under the right app.
+static void client_identify(Client *c, uint64_t pid)
+{
+    static struct taskinfo tasks[256];
+    c->pid = pid;
+    c->exe[0] = '\0';
+    int n = tasklist(tasks, 256);
+    for (int i = 0; i < n; i++)
+    {
+        if (tasks[i].pid != pid)
+            continue;
+        memcpy(c->exe, tasks[i].name, sizeof(c->exe));
+        c->exe[sizeof(c->exe) - 1] = '\0';
+        break;
+    }
+}
+
 static void client_disconnect(Client *c)
 {
     for (int i = 0; i < MAX_WINDOWS; i++)
@@ -60,6 +77,9 @@ static void client_handle(Client *c, const SxMsgHeader *hdr)
     {
         case SX_REQ_HELLO:
         {
+            if (hdr->size >= sizeof(SxReqHello))
+                client_identify(c, ((const SxReqHello *)hdr)->pid);
+
             SxEvtMsg ev;
             memset(&ev, 0, sizeof(ev));
             ev.hdr.type = SX_EVT_WELCOME;
@@ -106,7 +126,7 @@ static void client_handle(Client *c, const SxMsgHeader *hdr)
                 w->title[SX_TITLE_MAX - 1] = '\0';
                 if (window_visible(w))
                     damage_add(titlebar_rect(w));
-                damage_panel();
+                damage_chrome();
             }
             break;
 
@@ -129,7 +149,7 @@ static void client_handle(Client *c, const SxMsgHeader *hdr)
                     if (window_has_frame(w))
                         window_focus(w);
                     damage_window(w);
-                    damage_panel();
+                    damage_chrome();
                     update_hover();
                     anim_window_open(w);
                 }
@@ -155,7 +175,7 @@ static void client_handle(Client *c, const SxMsgHeader *hdr)
                     damage_window(w);
                     if (!hidden)
                         anim_window_open(w);
-                    damage_panel();
+                    damage_chrome();
                     if (hidden && S.focused == w)
                         window_focus(topmost_visible(w));
                     update_hover();

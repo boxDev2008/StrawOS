@@ -15,12 +15,14 @@
 #include <dirent.h>
 
 #include <strawx.h>
+#include <ui.h>
 
 #include "server.h"
 #include "render.c"
 #include "shell.c"
 #include "anim.c"
 #include "windows.c"
+#include "workspace.c"
 #include "input.c"
 #include "clients.c"
 
@@ -44,7 +46,7 @@ static void settings_load(void)
 
     S.clock_24h = sx_setting_get_int("clock_24h", 1) != 0;
     S.show_date = sx_setting_get_int("show_date", 1) != 0;
-    S.desktop_icons = sx_setting_get_int("desktop_icons", 1) != 0;
+    S.desktop_icons = sx_setting_get_int("desktop_icons", 0) != 0;
     S.pointer_speed = sx_setting_get_int("pointer_speed", 2);
     S.animations = sx_setting_get_int("animations", 1) != 0;
     wallpaper_generate();
@@ -150,7 +152,8 @@ static void poll_input(void)
 int main(void)
 {
     memset(&S, 0, sizeof(S));
-    S.panel_hover = -1;
+    S.bar_hover = BAR_NONE;
+    S.dock_hover = -1;
     S.menu_hover = -1;
     S.desktop_hover = -1;
     S.desktop_selected = -1;

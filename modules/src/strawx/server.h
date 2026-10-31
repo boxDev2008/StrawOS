@@ -3,15 +3,26 @@
 #define MAX_DAMAGE    32
 #define CLIENT_RX_MAX 8192
 
-#define TITLE_H       34
-#define FRAME_RADIUS  10
+#define TITLE_H       36
+#define FRAME_RADIUS  12
 #define SHADOW_SIZE   28
 #define SHADOW_OFF_Y  8
 #define RESIZE_GRIP   6
 #define MIN_WIN_W     160
 #define MIN_WIN_H     60
 
-#define PANEL_H       46
+#define BAR_H         32
+#define WORKSPACES    4
+#define SNAP_GAP      10
+#define SNAP_EDGE     4
+#define DRAG_THRESHOLD 6
+
+#define DOCK_ICON     44
+#define DOCK_PAD      8
+#define DOCK_GAP      6
+#define DOCK_MARGIN   10
+#define DOCK_H        (DOCK_ICON + DOCK_PAD * 2 + 6)
+#define DOCK_REVEAL   3
 
 #define DEVFS_IOCTL_FB_GET_INFO 0x1000
 #define DEVFS_IOCTL_FB_ACQUIRE  0x1001
@@ -57,7 +68,8 @@ AnimSnap;
 typedef enum
 {
     FADE_TITLE,
-    FADE_PANEL,
+    FADE_BAR,
+    FADE_DOCK,
     FADE_MENU,
     FADE_DESK,
     FADE_KINDS,
@@ -71,6 +83,8 @@ struct Client
     uint32_t id;
     uint8_t  rx[CLIENT_RX_MAX];
     size_t   rx_len;
+    uint64_t pid;
+    char     exe[TASKINFO_NAME_MAX];
 };
 
 struct Window
@@ -95,6 +109,9 @@ struct Window
 
     bool      size_driven;
     bool      cfg_pending;
+
+    int       workspace;
+    bool      snapped;
 
     AnimSnap  close_snap;
     uint64_t  close_snap_ms;
@@ -194,6 +211,15 @@ static struct
     HitZone       drag_zone;
     int           drag_start_mx, drag_start_my;
     SxRect        drag_start_rect;
+    SxRect        drag_orig_rect;
+    bool          drag_detach;
+
+    bool          snap_active;
+    SxRect        snap_rect;
+    int           snap_kind;
+
+    int           workspace;
+    Window       *ws_focus[WORKSPACES];
 
     uint64_t      last_click_ms;
     int           last_click_x, last_click_y;
@@ -205,8 +231,12 @@ static struct
 
     bool          menu_open;
     int           menu_hover;
+    int           menu_sel;
     int           menu_scroll;
-    int           panel_hover;
+    char          menu_query[32];
+    int           bar_hover;
+    int           dock_hover;
+    float         dock_level;
     int           desktop_selected;
     int           desktop_hover;
     int           last_minute;
@@ -237,8 +267,13 @@ static void window_request_close(Window *w);
 static bool window_visible(Window *w);
 static void send_event(Window *w, uint16_t type, const SxEvtMsg *proto);
 static void shell_launch(int app_index);
-static SxRect panel_rect(void);
+static SxRect bar_rect(void);
+static SxRect dock_rect(void);
+static SxRect dock_outer_rect(void);
 static SxRect menu_rect(void);
+static SxRect work_area(void);
+static void damage_chrome(void);
+static void update_hover(void);
 static void settings_load(void);
 static void damage_window(Window *w);
 static SxRect frame_outer_rect(SxRect f);

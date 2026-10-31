@@ -264,6 +264,7 @@ int sx_connect(void)
     SxReqHello hello;
     memset(&hello, 0, sizeof(hello));
     hello.version = SX_PROTOCOL_VERSION;
+    hello.pid = getpid();
     sx_send(&hello, SX_REQ_HELLO, sizeof(hello), 0);
     sx_theme_load();
 

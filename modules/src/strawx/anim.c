@@ -2,12 +2,13 @@
 #define FADE_MAX              16
 #define ANIM_FRAME_MS         16
 
-#define ANIM_OPEN_MS          180
-#define ANIM_CLOSE_MS         150
-#define ANIM_MINIMIZE_MS      230
-#define ANIM_MAXIMIZE_MS      200
-#define ANIM_MENU_MS          150
-#define ANIM_HOVER_MS         110
+#define ANIM_OPEN_MS          120
+#define ANIM_CLOSE_MS         100
+#define ANIM_MINIMIZE_MS      155
+#define ANIM_MAXIMIZE_MS      135
+#define ANIM_MENU_MS          100
+#define ANIM_DOCK_MS          145
+#define ANIM_HOVER_MS         75
 
 #define ANIM_OPEN_SCALE       0.94f
 #define CLOSE_SNAP_MAX_AGE_MS 3000
@@ -137,7 +138,9 @@ static AnimSnap anim_capture_screen(Window *w)
     SxRect f = window_frame_rect(w);
     if (f.x < 0 || f.y < 0 || f.x + f.w > S.width || f.y + f.h > S.height)
         return s;
-    if (!sx_rect_empty(sx_rect_intersect(f, panel_rect())) || !sx_rect_empty(sx_rect_intersect(f, S.cursor_rect)))
+    if (!sx_rect_empty(sx_rect_intersect(f, bar_rect())) || !sx_rect_empty(sx_rect_intersect(f, S.cursor_rect)))
+        return s;
+    if (S.dock_level > 0.0f && !sx_rect_empty(sx_rect_intersect(f, dock_outer_rect())))
         return s;
     if (S.menu_level > 0.0f && !sx_rect_empty(sx_rect_intersect(f, menu_outer_rect())))
         return s;
@@ -288,20 +291,13 @@ static void anim_note_close_request(Window *w)
     w->close_snap_ms = uptime_ms();
 }
 
-static SxRect anim_panel_target(Window *w, SxRect f)
+static SxRect anim_dock_target(Window *w, SxRect f)
 {
-    Window *list[MAX_WINDOWS];
-    int n = panel_windows(list);
-    for (int i = 0; i < n; i++)
-    {
-        if (list[i] != w)
-            continue;
-        SxRect b = panel_button_rect(i, n);
-        int tw = b.w;
-        int th = f.w ? f.h * tw / f.w : b.h;
-        return sx_rect(b.x, b.y + b.h / 2 - th / 2, tw, th);
-    }
-    return rect_scale(f, 0.2f);
+    SxRect b = dock_target_for(w);
+    if (sx_rect_empty(b) || f.w <= 0)
+        return rect_scale(f, 0.2f);
+    int th = f.h * b.w / f.w;
+    return sx_rect(b.x, b.y + b.h / 2 - th / 2, b.w, th);
 }
 
 // Call before the window is marked minimized.
@@ -309,7 +305,7 @@ static void anim_window_minimize(Window *w)
 {
     AnimSnap s = anim_capture(w);
     SxRect f = window_frame_rect(w);
-    anim_begin(w, false, s, f, anim_panel_target(w, f), 1.0f, 0.0f, ANIM_MINIMIZE_MS, true);
+    anim_begin(w, false, s, f, anim_dock_target(w, f), 1.0f, 0.0f, ANIM_MINIMIZE_MS, true);
 }
 
 // Call after the window is marked visible again.
@@ -317,7 +313,7 @@ static void anim_window_restore(Window *w)
 {
     AnimSnap s = anim_capture(w);
     SxRect f = window_frame_rect(w);
-    anim_begin(w, true, s, anim_panel_target(w, f), f, 0.2f, 1.0f, ANIM_MINIMIZE_MS, false);
+    anim_begin(w, true, s, anim_dock_target(w, f), f, 0.2f, 1.0f, ANIM_MINIMIZE_MS, false);
 }
 
 // before was captured ahead of a maximize or restore; animates from it to the new frame.
@@ -431,8 +427,10 @@ static int64_t fade_current(FadeKind kind)
     {
         case FADE_TITLE:
             return S.hover_frame_win ? ((int64_t)S.hover_frame_win->id << 4) | S.hover_zone : FADE_NONE;
-        case FADE_PANEL:
-            return S.panel_hover != -1 ? S.panel_hover : FADE_NONE;
+        case FADE_BAR:
+            return S.bar_hover != BAR_NONE ? S.bar_hover : FADE_NONE;
+        case FADE_DOCK:
+            return S.dock_hover >= 0 ? S.dock_hover : FADE_NONE;
         case FADE_MENU:
             return S.menu_open && S.menu_hover >= 0 ? S.menu_hover : FADE_NONE;
         case FADE_DESK:
@@ -454,13 +452,10 @@ static SxRect fade_rect(FadeKind kind, int64_t key)
                     return titlebar_button_rect(w, (HitZone)(key & 0xF));
             }
             break;
-        case FADE_PANEL:
-        {
-            if (key == -2)
-                return panel_start_rect();
-            Window *list[MAX_WINDOWS];
-            return panel_button_rect((int)key, panel_windows(list));
-        }
+        case FADE_BAR:
+            return bar_item_rect((int)key);
+        case FADE_DOCK:
+            return dock_fade_rect((int)key);
         case FADE_MENU:
             if (key < shell_app_count)
                 return menu_item_rect((int)key);
@@ -549,6 +544,25 @@ static bool menu_tick(float step)
     return S.menu_level != target;
 }
 
+static bool dock_tick(float step)
+{
+    float target = dock_should_show() ? 1.0f : 0.0f;
+    if (S.dock_level == target)
+        return false;
+
+    damage_add(dock_outer_rect());
+    if (!S.animations)
+        S.dock_level = target;
+    else if (S.dock_level < target)
+        S.dock_level = S.dock_level + step > target ? target : S.dock_level + step;
+    else
+        S.dock_level = S.dock_level - step < target ? target : S.dock_level - step;
+    damage_add(dock_outer_rect());
+    if (S.dock_level < 0.9f)
+        S.dock_hover = -1;
+    return S.dock_level != target;
+}
+
 static void anim_tick(void)
 {
     static uint64_t last;
@@ -583,6 +597,7 @@ static void anim_tick(void)
     }
 
     busy |= menu_tick((float)dt / ANIM_MENU_MS);
+    busy |= dock_tick((float)dt / ANIM_DOCK_MS);
     busy |= fade_tick((float)dt / ANIM_HOVER_MS);
     S.anim_busy = busy;
 }

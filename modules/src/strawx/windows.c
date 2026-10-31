@@ -14,9 +14,11 @@ static void damage_window(Window *w)
     damage_add(window_outer_rect(w));
 }
 
-static void damage_panel(void)
+static void damage_chrome(void)
 {
-    damage_add(panel_rect());
+    damage_add(bar_rect());
+    if (S.dock_level > 0.0f)
+        damage_add(dock_outer_rect());
 }
 
 static Window *topmost_visible(Window *except)
@@ -50,7 +52,7 @@ static void window_focus(Window *w)
         send_event(w, SX_EVT_FOCUS_IN, &ev);
         damage_window(w);
     }
-    damage_panel();
+    damage_chrome();
 }
 
 static void window_raise(Window *w)
@@ -83,6 +85,7 @@ static Window *window_create(Client *client, const SxReqCreateWindow *req)
     w->client = client;
     w->flags = req->flags;
     w->created_order = ++S.order_counter;
+    w->workspace = S.workspace;
     memcpy(w->title, req->title, SX_TITLE_MAX);
     w->title[SX_TITLE_MAX - 1] = '\0';
 
@@ -93,18 +96,18 @@ static Window *window_create(Client *client, const SxReqCreateWindow *req)
 
     if (req->x == SX_POS_AUTO || req->y == SX_POS_AUTO)
     {
-        int work_h = S.height - PANEL_H;
+        int top = BAR_H + TITLE_H;
         int off = (S.cascade++ % 8) * 30 - 105;
         w->x = (S.width - w->w) / 2 + off;
-        w->y = (work_h - w->h + TITLE_H) / 2 + off;
+        w->y = top + (S.height - top - w->h) / 2 + off;
         if (w->x < 8)
             w->x = 8;
-        if (w->y < TITLE_H + 8)
-            w->y = TITLE_H + 8;
+        if (w->y < top + 8)
+            w->y = top + 8;
         if (w->x + w->w > S.width - 8)
             w->x = S.width - 8 - w->w > 1 ? S.width - 8 - w->w : 1;
-        if (w->y + w->h > work_h - 8)
-            w->y = work_h - 8 - w->h > TITLE_H ? work_h - 8 - w->h : TITLE_H;
+        if (w->y + w->h > S.height - 8)
+            w->y = S.height - 8 - w->h > top ? S.height - 8 - w->h : top;
     }
     else
     {
@@ -192,7 +195,7 @@ static void window_set_minimized(Window *w, bool minimized)
     damage_window(w);
     w->minimized = minimized;
     damage_window(w);
-    damage_panel();
+    damage_chrome();
 
     if (!minimized)
         anim_window_restore(w);
@@ -201,30 +204,43 @@ static void window_set_minimized(Window *w, bool minimized)
         window_focus(topmost_visible(w));
 }
 
-static void window_toggle_maximize(Window *w)
+static SxRect maximized_rect(void)
 {
-    if (!(w->flags & SX_WINDOW_RESIZABLE))
+    SxRect a = work_area();
+    return sx_rect(a.x + 1, a.y + TITLE_H, a.w - 2, a.h - TITLE_H - 1);
+}
+
+static void window_set_maximized(Window *w, bool on, SxRect restore)
+{
+    if (!(w->flags & SX_WINDOW_RESIZABLE) || w->maximized == on)
         return;
 
     AnimSnap before = anim_capture(w);
     damage_window(w);
-    if (w->maximized)
+    w->maximized = on;
+    if (on)
     {
-        w->maximized = false;
+        w->restore = restore;
+        w->snapped = false;
+        SxRect m = maximized_rect();
+        w->x = m.x;
+        w->y = m.y;
+        window_set_size(w, m.w, m.h);
+    }
+    else
+    {
         w->x = w->restore.x;
         w->y = w->restore.y;
         window_set_size(w, w->restore.w, w->restore.h);
     }
-    else
-    {
-        w->maximized = true;
-        w->restore = window_client_rect(w);
-        w->x = 1;
-        w->y = TITLE_H;
-        window_set_size(w, S.width - 2, S.height - PANEL_H - TITLE_H - 1);
-    }
     damage_window(w);
-    anim_window_reframe(w, before);
+    if (before.px)
+        anim_window_reframe(w, before);
+}
+
+static void window_toggle_maximize(Window *w)
+{
+    window_set_maximized(w, !w->maximized, w->snapped ? w->restore : window_client_rect(w));
 }
 
 static void window_request_close(Window *w)
@@ -246,7 +262,7 @@ static void window_destroy(Window *w)
 
     if (window_visible(w))
         damage_window(w);
-    damage_panel();
+    damage_chrome();
 
     int idx = -1;
     for (int i = 0; i < S.zcount; i++)
@@ -270,6 +286,9 @@ static void window_destroy(Window *w)
     }
     if (S.last_click_win == w)
         S.last_click_win = NULL;
+    for (int i = 0; i < WORKSPACES; i++)
+        if (S.ws_focus[i] == w)
+            S.ws_focus[i] = NULL;
 
     bool was_focused = S.focused == w;
     w->used = false;

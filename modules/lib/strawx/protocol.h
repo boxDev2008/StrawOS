@@ -38,6 +38,7 @@ typedef struct
 {
     SxMsgHeader hdr;
     uint32_t    version;
+    uint64_t    pid;
 }
 SxReqHello;
 

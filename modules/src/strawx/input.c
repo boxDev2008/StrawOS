@@ -91,7 +91,7 @@ static void cycle_windows(void)
     for (int i = 0; i < S.zcount; i++)
     {
         Window *w = S.zorder[i];
-        if (!w->mapped || w->hidden || !window_has_frame(w) || w == S.focused)
+        if (!w->mapped || w->hidden || !window_has_frame(w) || w == S.focused || w->workspace != S.workspace)
             continue;
         window_raise(w);
         window_focus(w);
@@ -101,6 +101,47 @@ static void cycle_windows(void)
 }
 
 static bool super_alone;
+
+// Super shortcuts for the window manager. Returns true when the key was used.
+static bool handle_super_key(uint16_t key)
+{
+    bool shift = (S.mods & SX_MOD_SHIFT) != 0;
+    Window *f = S.focused && window_visible(S.focused) && window_has_frame(S.focused) ? S.focused : NULL;
+
+    if (key >= '1' && key < '1' + WORKSPACES)
+    {
+        if (shift)
+            window_move_to_workspace(f, key - '1');
+        else
+            workspace_switch(key - '1');
+        return true;
+    }
+
+    switch (key)
+    {
+        case 'q':
+            if (f)
+                window_request_close(f);
+            return true;
+        case SX_KEY_ENTER:
+            shell_launch_exe("/bin/terminal.elf");
+            return true;
+        case SX_KEY_LEFT:
+        case SX_KEY_RIGHT:
+            focus_neighbour(key == SX_KEY_LEFT ? -1 : 1);
+            return true;
+        case SX_KEY_UP:
+            if (f)
+                window_toggle_maximize(f);
+            return true;
+        case SX_KEY_DOWN:
+            if (f)
+                window_set_minimized(f, true);
+            return true;
+        default:
+            return false;
+    }
+}
 
 static void handle_key(uint16_t key, bool pressed, char ch)
 {
@@ -121,17 +162,27 @@ static void handle_key(uint16_t key, bool pressed, char ch)
         if (pressed)
             super_alone = true;
         else if (super_alone)
-            shell_panel_click(-2);
+            shell_toggle_menu();
         return;
     }
     if (pressed)
         super_alone = false;
 
-    if (pressed && S.menu_open && key == SX_KEY_ESCAPE)
+    if ((S.mods & SX_MOD_SUPER) && !mod)
     {
-        shell_close_menu();
+        if (pressed)
+        {
+            uint16_t k = key >= 'A' && key <= 'Z' ? (uint16_t)(key - 'A' + 'a') : key;
+            if (handle_super_key(k))
+                damage_chrome();
+        }
         return;
     }
+
+    if (pressed && !mod && shell_menu_key(key, ch))
+        return;
+    if (S.menu_open && !mod)
+        return;
 
     if (pressed && (S.mods & SX_MOD_ALT))
     {
@@ -334,34 +385,38 @@ static CursorKind cursor_for_zone(HitZone z)
 
 static void update_hover(void)
 {
-    int menu_item = S.menu_open && sx_rect_contains(menu_rect(), S.mx, S.my) ? menu_hit(S.mx, S.my) : -1;
+    bool over_menu = S.menu_open && sx_rect_contains(menu_rect(), S.mx, S.my);
+    int menu_item = over_menu ? menu_hit(S.mx, S.my) : -1;
     if (menu_item != S.menu_hover)
     {
         S.menu_hover = menu_item;
         damage_add(menu_rect());
     }
 
-    bool over_menu = S.menu_open && sx_rect_contains(menu_rect(), S.mx, S.my);
-    bool over_panel = sx_rect_contains(panel_rect(), S.mx, S.my);
-
-    int ph = over_panel ? panel_hit(S.mx, S.my) : -1;
-    if (ph != S.panel_hover)
+    bool over_bar = !over_menu && sx_rect_contains(bar_rect(), S.mx, S.my);
+    int bh = over_bar ? bar_hit(S.mx, S.my) : BAR_NONE;
+    if (bh != S.bar_hover)
     {
-        S.panel_hover = ph;
-        damage_add(panel_rect());
+        S.bar_hover = bh;
+        damage_add(bar_rect());
     }
 
-    HitZone zone = HIT_NONE;
-    Window *w = (over_menu || over_panel) ? NULL : hit_test(S.mx, S.my, &zone);
+    int dh = !over_menu && !over_bar ? dock_hit(S.mx, S.my) : -1;
+    bool over_dock = S.dock_level >= 0.9f && sx_rect_contains(dock_rect(), S.mx, S.my) && !over_menu;
+    S.dock_hover = dh;
 
-    int dh = (!w && !over_menu && !over_panel) ? desktop_hit(S.mx, S.my) : -1;
-    if (dh != S.desktop_hover)
+    bool over_shell = over_menu || over_bar || over_dock;
+    HitZone zone = HIT_NONE;
+    Window *w = over_shell ? NULL : hit_test(S.mx, S.my, &zone);
+
+    int deskh = (!w && !over_shell) ? desktop_hit(S.mx, S.my) : -1;
+    if (deskh != S.desktop_hover)
     {
         if (S.desktop_hover >= 0)
             damage_add(desktop_cell(S.desktop_hover));
-        S.desktop_hover = dh;
-        if (dh >= 0)
-            damage_add(desktop_cell(dh));
+        S.desktop_hover = deskh;
+        if (deskh >= 0)
+            damage_add(desktop_cell(deskh));
     }
 
     set_frame_hover(w, zone);
@@ -374,11 +429,11 @@ static void update_hover(void)
 
 static void clamp_window_position(Window *w)
 {
-    int work_h = S.height - PANEL_H;
-    if (w->y < TITLE_H)
-        w->y = window_has_frame(w) ? TITLE_H : (w->y < 0 ? 0 : w->y);
-    if (w->y > work_h - 8)
-        w->y = work_h - 8;
+    int top = BAR_H + (window_has_frame(w) ? TITLE_H : 0);
+    if (w->y < top)
+        w->y = top;
+    if (w->y > S.height - 8)
+        w->y = S.height - 8;
     if (w->x + w->w < 60)
         w->x = 60 - w->w;
     if (w->x > S.width - 60)
@@ -394,11 +449,20 @@ static void handle_motion(void)
         case DRAG_MOVE:
         {
             Window *w = S.drag_win;
+            int dx = S.mx - S.drag_start_mx, dy = S.my - S.drag_start_my;
+            if (S.drag_detach)
+            {
+                if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD)
+                    break;
+                drag_detach(w);
+                dx = dy = 0;
+            }
             damage_window(w);
-            w->x = S.drag_start_rect.x + (S.mx - S.drag_start_mx);
-            w->y = S.drag_start_rect.y + (S.my - S.drag_start_my);
+            w->x = S.drag_start_rect.x + dx;
+            w->y = S.drag_start_rect.y + dy;
             clamp_window_position(w);
             damage_window(w);
+            snap_update(w);
             break;
         }
 
@@ -409,9 +473,9 @@ static void handle_motion(void)
             int edges = S.drag_zone & ~HIT_RESIZE;
             int dx = S.mx - S.drag_start_mx, dy = S.my - S.drag_start_my;
 
-            // Keep the titlebar on screen when dragging the top edge up.
-            if ((edges & EDGE_T) && sr.y + dy < TITLE_H)
-                dy = TITLE_H - sr.y;
+            // Keep the titlebar below the top bar when dragging the top edge up.
+            if ((edges & EDGE_T) && sr.y + dy < BAR_H + TITLE_H)
+                dy = BAR_H + TITLE_H - sr.y;
 
             int nw = sr.w, nh = sr.h;
             if (edges & EDGE_R) nw = sr.w + dx;
@@ -476,24 +540,31 @@ static void handle_left_press(void)
         {
             int item = menu_hit(S.mx, S.my);
             if (item >= 0)
-            {
-                shell_close_menu();
-                shell_launch(item);
-            }
+                shell_menu_launch(item);
             return;
         }
-        if (!sx_rect_contains(panel_start_rect(), S.mx, S.my))
+        if (!sx_rect_contains(bar_logo_rect(), S.mx, S.my))
         {
             shell_close_menu();
             return;
         }
     }
 
-    if (sx_rect_contains(panel_rect(), S.mx, S.my))
+    if (sx_rect_contains(bar_rect(), S.mx, S.my))
     {
-        int hit = panel_hit(S.mx, S.my);
-        if (hit != -1)
-            shell_panel_click(hit);
+        int hit = bar_hit(S.mx, S.my);
+        if (hit != BAR_NONE)
+            shell_bar_click(hit);
+        damage_chrome();
+        return;
+    }
+
+    if (S.dock_level >= 0.9f && sx_rect_contains(dock_rect(), S.mx, S.my))
+    {
+        int hit = dock_hit(S.mx, S.my);
+        if (hit >= 0)
+            shell_dock_click(hit);
+        damage_chrome();
         return;
     }
 
@@ -537,13 +608,13 @@ static void handle_left_press(void)
                 window_toggle_maximize(w);
                 break;
             }
-            if (w->maximized)
-                break;
             S.drag = DRAG_MOVE;
             S.drag_win = w;
             S.drag_start_mx = S.mx;
             S.drag_start_my = S.my;
             S.drag_start_rect = window_client_rect(w);
+            S.drag_orig_rect = w->snapped ? w->restore : S.drag_start_rect;
+            S.drag_detach = w->maximized || w->snapped;
             break;
 
         case HIT_CLOSE:
@@ -566,6 +637,7 @@ static void handle_left_press(void)
             S.drag = DRAG_RESIZE;
             S.drag_win = w;
             S.drag_zone = zone;
+            w->snapped = false;
             S.drag_start_mx = S.mx;
             S.drag_start_my = S.my;
             S.drag_start_rect = window_client_rect(w);
@@ -588,6 +660,12 @@ static void handle_left_release(void)
     {
         case DRAG_CLIENT:
             send_pointer_event(w, SX_EVT_MOUSE_UP, SX_BUTTON_LEFT, 0);
+            break;
+
+        case DRAG_MOVE:
+            if (S.snap_active)
+                snap_apply(w);
+            damage_chrome();
             break;
 
         case DRAG_TITLE_BUTTON:
@@ -625,7 +703,7 @@ static void handle_other_button(uint32_t button, bool pressed)
     {
         HitZone zone;
         Window *w = hit_test(S.mx, S.my, &zone);
-        if (w && zone == HIT_CLIENT && !sx_rect_contains(panel_rect(), S.mx, S.my))
+        if (w && zone == HIT_CLIENT && !sx_rect_contains(bar_rect(), S.mx, S.my))
         {
             target = w;
             if (pressed && window_has_frame(w))

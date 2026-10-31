@@ -55,14 +55,15 @@ typedef struct
     const char *key;
     const char *title;
     const char *description;
+    int         def;
 }
 Toggle;
 
 static const Toggle toggles[] = {
-    { "desktop_icons", "Show icons on the desktop", "Shortcuts from /desktop appear on the wallpaper" },
-    { "clock_24h",     "24-hour clock",             "Show 14:30 instead of 2:30 PM in the panel" },
-    { "show_date",     "Show the date",             "Display the date under the clock in the panel" },
-    { "animations",    "Animations",                "Animate windows, menus and hover highlights" },
+    { "desktop_icons", "Show icons on the desktop", "Shortcuts from /desktop appear on the wallpaper", 0 },
+    { "clock_24h",     "24-hour clock",             "Show 14:30 instead of 2:30 PM in the top bar", 1 },
+    { "show_date",     "Show the date",             "Display the date next to the clock in the top bar", 1 },
+    { "animations",    "Animations",                "Animate windows, menus and hover highlights", 1 },
 };
 #define TOGGLE_N ((int)(sizeof(toggles) / sizeof(toggles[0])))
 
@@ -324,10 +325,11 @@ static void draw_wallpaper_page(SxCanvas *c)
     sx_fill_rounded_rect(c, pv.x - 8, pv.y - 8, pv.w + 16, pv.h + 16, 12, sx_darken(SX_THEME_BG, 40));
     if (G.preview)
         sx_draw_image(c, G.preview, pv.x, pv.y);
-    sx_fill_rect(c, pv.x, pv.y + pv.h - 10, pv.w, 10, (sx_theme->panel & 0xFFFFFFu) | (214u << 24));
-    sx_fill_rounded_rect(c, pv.x + 4, pv.y + pv.h - 8, 6, 6, 2, SX_THEME_ACCENT);
+    sx_fill_rect(c, pv.x, pv.y, pv.w, 8, (sx_theme->panel & 0xFFFFFFu) | (214u << 24));
+    sx_fill_rounded_rect(c, pv.x + 4, pv.y + 2, 6, 4, 2, SX_THEME_ACCENT);
+    sx_fill_rounded_rect(c, pv.x + pv.w / 2 - 30, pv.y + pv.h - 14, 60, 10, 5, (sx_theme->panel & 0xFFFFFFu) | (200u << 24));
     for (int i = 0; i < 3; i++)
-        sx_fill_rounded_rect(c, pv.x + 10, pv.y + 10 + i * 20, 12, 12, 3, SX_RGBA(255, 255, 255, 150));
+        sx_fill_rounded_rect(c, pv.x + 10, pv.y + 16 + i * 20, 12, 12, 3, SX_RGBA(255, 255, 255, 150));
     sx_fill_rounded_rect(c, pv.x + 90, pv.y + 34, 110, 70, 4, sx_theme->title);
     sx_fill_rect(c, pv.x + 90, pv.y + 44, 110, 60, SX_THEME_BG);
 
@@ -406,8 +408,9 @@ static void draw_theme_card(SxCanvas *c, int i, SxRect r)
     sx_fill_rounded_rect(c, wx + 8, wy + 42, ww - 16, wh - 50, 4, t->surface);
     sx_fill_rounded_rect(c, wx + ww - 42, wy + wh - 20, 28, 10, 4, t->accent);
 
-    sx_fill_rect(c, r.x, r.y + r.h - 10, r.w, 10, (t->panel & 0xFFFFFFu) | (214u << 24));
-    sx_fill_rounded_rect(c, r.x + 5, r.y + r.h - 8, 6, 6, 2, t->accent);
+    sx_fill_rect(c, r.x, r.y, r.w, 8, (t->panel & 0xFFFFFFu) | (214u << 24));
+    sx_fill_rounded_rect(c, r.x + 5, r.y + 2, 6, 4, 2, t->accent);
+    sx_fill_rounded_rect(c, r.x + r.w / 2 - 24, r.y + r.h - 12, 48, 8, 4, (t->panel & 0xFFFFFFu) | (200u << 24));
 
     bool selected = sx_theme == t;
     if (selected)
@@ -429,14 +432,14 @@ static void draw_theme_card(SxCanvas *c, int i, SxRect r)
 
 static void draw_appearance_page(SxCanvas *c)
 {
-    draw_title(c, "Appearance", "Color themes for windows, the panel, apps and the terminal");
+    draw_title(c, "Appearance", "Color themes for windows, the top bar, apps and the terminal");
     for (int i = 0; i < sx_theme_count; i++)
         draw_theme_card(c, i, theme_rect(i));
 }
 
 static void draw_desktop_page(SxCanvas *c)
 {
-    draw_title(c, "Desktop & Panel", "How the desktop and the panel look");
+    draw_title(c, "Desktop & Panel", "How the desktop, top bar and dock look");
 
     for (int i = 0; i < TOGGLE_N; i++)
     {
@@ -444,7 +447,7 @@ static void draw_desktop_page(SxCanvas *c)
         sx_ui_panel(c, r, 10, hovering(HIT_TOGGLE, i) ? SX_THEME_SURFACE_HI : SX_THEME_SURFACE);
         sx_draw_text(c, &sx_font_sans_bold, r.x + 18, r.y + 12, toggles[i].title, SX_THEME_TEXT);
         sx_draw_text(c, &sx_font_sans_small, r.x + 18, r.y + 34, toggles[i].description, SX_THEME_TEXT_DIM);
-        draw_switch(c, toggle_switch_rect(i), sx_setting_get_int(toggles[i].key, 1) != 0, hovering(HIT_TOGGLE, i));
+        draw_switch(c, toggle_switch_rect(i), sx_setting_get_int(toggles[i].key, toggles[i].def) != 0, hovering(HIT_TOGGLE, i));
     }
 }
 
@@ -640,7 +643,7 @@ static void activate(Hit h)
         case HIT_TOGGLE:
         {
             const char *key = toggles[h.index].key;
-            sx_setting_set_int(key, sx_setting_get_int(key, 1) ? 0 : 1);
+            sx_setting_set_int(key, sx_setting_get_int(key, toggles[h.index].def) ? 0 : 1);
             sx_settings_apply();
             break;
         }
