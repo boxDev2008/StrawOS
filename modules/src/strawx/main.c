@@ -54,10 +54,10 @@ static void settings_load(void)
 
 static bool display_init(void)
 {
-    S.fb_fd = open("/dev/fb0", O_RDWR);
+    S.fb_fd = open("/dev/framebuffer", O_RDWR);
     if (S.fb_fd < 0)
     {
-        printf("strawx: cannot open /dev/fb0\n");
+        printf("strawx: cannot open /dev/framebuffer\n");
         return false;
     }
 

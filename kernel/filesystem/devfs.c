@@ -307,15 +307,15 @@ VNode *devfs_create_root(void)
             info->blue_mask_size = fb->blue_mask_size;
             info->blue_mask_shift = fb->blue_mask_shift;
 
-            devfs_add_child(root, "fb0", &devfs_fb_file_ops, info);
+            devfs_add_child(root, "framebuffer", &devfs_fb_file_ops, info);
 
-            kprintf("devfs: /dev/fb0 -> %ux%u, %u bpp, pitch %u\n",
+            kprintf("devfs: /dev/framebuffer -> %ux%u, %u bpp, pitch %u\n",
                 info->width, info->height, (unsigned)info->bpp, info->pitch);
         }
     }
     else
     {
-        kprintf("devfs: no Limine framebuffer response, /dev/fb0 not created\n");
+        kprintf("devfs: no Limine framebuffer response, /dev/framebuffer not created\n");
     }
 
     {
