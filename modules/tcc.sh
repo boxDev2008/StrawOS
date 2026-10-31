@@ -10,7 +10,7 @@ CFLAGS="--target=x86_64-unknown-none -O2 -ffreestanding -nostdlibinc -mno-red-zo
         -Ilib/libc/include"
 
 STAMP=$OBJ/sysroot.stamp
-if [ -f $STAMP ] && [ -z "$(find tcc.sh crt0.c lib/libc lib/strawx lib/stb $TCC/include $TCC/lib -newer $STAMP -print -quit)" ]; then
+if [ -f $STAMP ] && [ -z "$(find tcc.sh lib/libc lib/strawx lib/stb $TCC/include $TCC/lib -newer $STAMP -print -quit)" ]; then
     exit 0
 fi
 
@@ -25,7 +25,7 @@ for h in $TCC/include/*.h; do
 done
 
 # startup files: tcc links crt1.o crti.o ... crtn.o around every executable
-clang $CFLAGS -c crt0.c -o $SYSROOT/usr/lib/crt1.o
+clang $CFLAGS -c lib/libc/crt0.c -o $SYSROOT/usr/lib/crt1.o
 echo "" | clang $CFLAGS -x c -c - -o $SYSROOT/usr/lib/crti.o
 echo "" | clang $CFLAGS -x c -c - -o $SYSROOT/usr/lib/crtn.o
 

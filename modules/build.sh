@@ -74,7 +74,7 @@ PIDS+=($!)
 ./lite-xl.sh &
 PIDS+=($!)
 
-compile crt0.c;            CRT0=$OUT
+compile lib/libc/crt0.c;   CRT0=$OUT
 compile lib/libc/libc.c;   LIBC=$OUT
 compile lib/strawx/strawx.c; STRAWX=$OUT
 compile lib/net/netlib.c "${NET[@]}"; NETLIB=$OUT
