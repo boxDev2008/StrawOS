@@ -47,7 +47,7 @@ static void settings_load(void)
     S.clock_24h = sx_setting_get_int("clock_24h", 1) != 0;
     S.show_date = sx_setting_get_int("show_date", 1) != 0;
     S.desktop_icons = sx_setting_get_int("desktop_icons", 0) != 0;
-    S.pointer_speed = sx_setting_get_int("pointer_speed", 2);
+    S.pointer_speed = sx_setting_get_int("mouse_speed", 100);
     S.animations = sx_setting_get_int("animations", 1) != 0;
     wallpaper_generate();
 }

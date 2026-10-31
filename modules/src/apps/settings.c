@@ -67,8 +67,10 @@ static const Toggle toggles[] = {
 };
 #define TOGGLE_N ((int)(sizeof(toggles) / sizeof(toggles[0])))
 
-static const char *speed_names[] = { "Slow", "Medium", "Normal", "Fast" };
-#define SPEED_N 4
+#define SPEED_MIN    25
+#define SPEED_MAX    300
+#define SPEED_STEP   5
+#define SPEED_DEF    100
 
 typedef enum
 {
@@ -106,6 +108,9 @@ static struct
     SxImage   *preview;
     SxImage   *logo;
     int        scroll;
+
+    int        speed;       // slider value, saved when the drag ends
+    bool       dragging_speed;
 }
 G;
 
@@ -278,10 +283,48 @@ static SxRect toggle_switch_rect(int i)
     return sx_rect(r.x + r.w - 18 - 46, r.y + (r.h - 26) / 2, 46, 26);
 }
 
-static SxRect speed_rect(int i)
+static SxRect speed_track_rect(void)
 {
-    int w = (content_w() - 6) / SPEED_N;
-    return sx_rect(content_x() + 3 + i * w, 113, w, 34);
+    return sx_rect(content_x() + 12, 128, content_w() - 24, 6);
+}
+
+// The whole band around the track, so the slider is easy to grab.
+static SxRect speed_hit_rect(void)
+{
+    return sx_rect(content_x(), 112, content_w(), 38);
+}
+
+static int speed_x(int speed)
+{
+    SxRect t = speed_track_rect();
+    return t.x + (speed - SPEED_MIN) * t.w / (SPEED_MAX - SPEED_MIN);
+}
+
+static int clamp_speed(int speed)
+{
+    speed = (speed + SPEED_STEP / 2) / SPEED_STEP * SPEED_STEP;
+    return speed < SPEED_MIN ? SPEED_MIN : (speed > SPEED_MAX ? SPEED_MAX : speed);
+}
+
+static void load_speed(void)
+{
+    G.speed = clamp_speed(sx_setting_get_int("mouse_speed", SPEED_DEF));
+}
+
+static void save_speed(void)
+{
+    if (sx_setting_get_int("mouse_speed", SPEED_DEF) == G.speed)
+        return;
+    sx_setting_set_int("mouse_speed", G.speed);
+    sx_settings_apply();
+}
+
+static bool set_speed_from_x(int x)
+{
+    SxRect t = speed_track_rect();
+    int old = G.speed;
+    G.speed = clamp_speed(SPEED_MIN + (x - t.x) * (SPEED_MAX - SPEED_MIN) / t.w);
+    return G.speed != old;
 }
 
 static bool hovering(HitKind kind, int index)
@@ -457,24 +500,31 @@ static void draw_mouse_page(SxCanvas *c)
 
     sx_draw_text(c, &sx_font_sans_bold, content_x(), 84, "Pointer speed", SX_THEME_TEXT);
 
-    SxRect seg = sx_rect(content_x(), 110, content_w(), 40);
-    sx_fill_rounded_rect(c, seg.x, seg.y, seg.w, seg.h, 10, sx_darken(SX_THEME_BG, 25));
+    char value[16];
+    snprintf(value, sizeof(value), "%d%%", G.speed);
+    int vw = sx_text_width(&sx_font_sans, value);
+    sx_draw_text(c, &sx_font_sans, content_x() + content_w() - vw, 84, value, SX_THEME_TEXT_DIM);
 
-    int speed = sx_setting_get_int("pointer_speed", 2);
-    for (int i = 0; i < SPEED_N; i++)
-    {
-        SxRect r = speed_rect(i);
-        if (i == speed)
-            sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 8, SX_THEME_ACCENT);
-        else if (hovering(HIT_SPEED, i))
-            sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 8, SX_RGBA(255, 255, 255, 16));
-        sx_draw_text_centered(c, &sx_font_sans, r, speed_names[i], i == speed ? SX_THEME_ACCENT_TEXT : SX_THEME_TEXT);
-    }
+    SxRect t = speed_track_rect();
+    int kx = speed_x(G.speed);
+    int dx = speed_x(SPEED_DEF);
+    sx_fill_rounded_rect(c, t.x, t.y, t.w, t.h, t.h / 2, sx_darken(SX_THEME_BG, 35));
+    sx_fill_rounded_rect(c, t.x, t.y, kx - t.x, t.h, t.h / 2, SX_THEME_ACCENT);
+    sx_fill_rect(c, dx, t.y + t.h + 5, 1, 6, SX_THEME_TEXT_DIM);
 
-    sx_draw_text(c, &sx_font_sans_small, content_x(), 166,
+    bool hot = G.dragging_speed || hovering(HIT_SPEED, 0);
+    float ky = t.y + t.h * 0.5f;
+    sx_fill_circle(c, (float)kx, ky + 1, hot ? 11.0f : 10.0f, SX_RGBA(0, 0, 0, 60));
+    sx_fill_circle(c, (float)kx, ky, hot ? 11.0f : 10.0f, SX_RGB(255, 255, 255));
+
+    sx_draw_text(c, &sx_font_sans_small, t.x, t.y + 18, "Slow", SX_THEME_TEXT_DIM);
+    int fw = sx_text_width(&sx_font_sans_small, "Fast");
+    sx_draw_text(c, &sx_font_sans_small, t.x + t.w - fw, t.y + 18, "Fast", SX_THEME_TEXT_DIM);
+
+    sx_draw_text(c, &sx_font_sans_small, content_x(), 176,
                  "Applies straight away. In QEMU, click inside the window to capture the mouse",
                  SX_THEME_TEXT_DIM);
-    sx_draw_text(c, &sx_font_sans_small, content_x(), 184, "and press Ctrl+Alt+G to release it.", SX_THEME_TEXT_DIM);
+    sx_draw_text(c, &sx_font_sans_small, content_x(), 194, "and press Ctrl+Alt+G to release it.", SX_THEME_TEXT_DIM);
 }
 
 static void draw_about_page(SxCanvas *c)
@@ -595,9 +645,8 @@ static Hit hit_test(int x, int y)
                     return (Hit){ HIT_TOGGLE, i };
             break;
         case PAGE_MOUSE:
-            for (int i = 0; i < SPEED_N; i++)
-                if (sx_rect_contains(speed_rect(i), x, y))
-                    return (Hit){ HIT_SPEED, i };
+            if (sx_rect_contains(speed_hit_rect(), x, y))
+                return (Hit){ HIT_SPEED, 0 };
             break;
         default:
             break;
@@ -647,10 +696,6 @@ static void activate(Hit h)
             sx_settings_apply();
             break;
         }
-        case HIT_SPEED:
-            sx_setting_set_int("pointer_speed", h.index);
-            sx_settings_apply();
-            break;
         default:
             break;
     }
@@ -676,6 +721,7 @@ int main(int argc, char **argv)
     if (G.page == PAGE_WALLPAPER)
         load_walls();
     refresh_current();
+    load_speed();
     draw();
 
     uint64_t last_about = sx_time_ms();
@@ -710,11 +756,18 @@ int main(int argc, char **argv)
 
             case SX_EVENT_FOCUS_IN:
                 refresh_current();
+                if (!G.dragging_speed)
+                    load_speed();
                 redraw = true;
                 break;
 
             case SX_EVENT_MOUSE_MOVE:
             {
+                if (G.dragging_speed)
+                {
+                    redraw |= set_speed_from_x(ev.x);
+                    break;
+                }
                 Hit h = hit_test(ev.x, ev.y);
                 if (h.kind != G.hover.kind || h.index != G.hover.index)
                 {
@@ -732,7 +785,24 @@ int main(int argc, char **argv)
             case SX_EVENT_MOUSE_DOWN:
                 if (ev.button == SX_BUTTON_LEFT)
                 {
-                    activate(hit_test(ev.x, ev.y));
+                    Hit h = hit_test(ev.x, ev.y);
+                    if (h.kind == HIT_SPEED)
+                    {
+                        G.dragging_speed = true;
+                        set_speed_from_x(ev.x);
+                    }
+                    else
+                        activate(h);
+                    G.hover = hit_test(ev.x, ev.y);
+                    redraw = true;
+                }
+                break;
+
+            case SX_EVENT_MOUSE_UP:
+                if (ev.button == SX_BUTTON_LEFT && G.dragging_speed)
+                {
+                    G.dragging_speed = false;
+                    save_speed();
                     G.hover = hit_test(ev.x, ev.y);
                     redraw = true;
                 }
@@ -749,6 +819,13 @@ int main(int argc, char **argv)
                 break;
 
             case SX_EVENT_KEY_DOWN:
+                if (G.page == PAGE_MOUSE && (ev.key == SX_KEY_LEFT || ev.key == SX_KEY_RIGHT))
+                {
+                    G.speed = clamp_speed(G.speed + (ev.key == SX_KEY_RIGHT ? SPEED_STEP : -SPEED_STEP));
+                    save_speed();
+                    redraw = true;
+                    break;
+                }
                 if (ev.key == SX_KEY_DOWN && G.page < PAGE_COUNT - 1)
                     G.page = (Page)(G.page + 1);
                 else if (ev.key == SX_KEY_UP && G.page > 0)

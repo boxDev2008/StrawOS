@@ -720,13 +720,12 @@ static void handle_other_button(uint32_t button, bool pressed)
 
 static void handle_mouse_event(const MouseEvent *ev)
 {
-    static const int speed_num[] = { 1, 2, 4, 6 };
-    int num = speed_num[S.pointer_speed < 0 ? 0 : (S.pointer_speed > 3 ? 3 : S.pointer_speed)];
-    S.mouse_frac_x += ev->dx * num;
-    S.mouse_frac_y += ev->dy * num;
-    int dx = S.mouse_frac_x / 4, dy = S.mouse_frac_y / 4;
-    S.mouse_frac_x -= dx * 4;
-    S.mouse_frac_y -= dy * 4;
+    int pct = S.pointer_speed < 10 ? 10 : (S.pointer_speed > 400 ? 400 : S.pointer_speed);
+    S.mouse_frac_x += ev->dx * pct;
+    S.mouse_frac_y += ev->dy * pct;
+    int dx = S.mouse_frac_x / 100, dy = S.mouse_frac_y / 100;
+    S.mouse_frac_x -= dx * 100;
+    S.mouse_frac_y -= dy * 100;
 
     int nx = S.mx + dx;
     int ny = S.my + dy;
