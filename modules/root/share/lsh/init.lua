@@ -90,6 +90,8 @@ command("help", "help", "show this list", function()
         out("  ", YELLOW, string.format("%-26s", h.usage), RESET, GRAY, h.desc, RESET, "\n")
     end
     out("\nPrograms in /bin run by name, e.g. ", GREEN, "cube", RESET, " or ", GREEN, "files /pictures", RESET, ".\n")
+    out("Chain commands with ", YELLOW, ";", RESET, ", ", YELLOW, "&&", RESET, " and ", YELLOW, "||", RESET,
+        ", e.g. ", GREEN, "cd /bin && ls", RESET, ".\n")
     out("Start a line with ", YELLOW, "=", RESET, " to print a value, e.g. ", YELLOW, "=2^10", RESET, ".\n")
     out("Commands are also Lua functions: ", YELLOW, "sh.ls(\"/bin\")", RESET, ", ",
         YELLOW, "system.list(\"/\")", RESET, ".\n")
@@ -233,11 +235,12 @@ local function launch(prog, args)
         local pid = shell.spawn(prog, table.unpack(args))
         if not pid then fail("could not start " .. prog) end
         out(GRAY, "[", pid, "] started in the background", RESET, "\n")
-        return
+        return true
     end
     local code, e = shell.run(prog, table.unpack(args))
     if not code then fail(e) end
     shell.last_status = code
+    return code == 0
 end
 
 command("run", "run <program> [args...]", "start a program (add & to run it in the background)", function(name, ...)
@@ -405,22 +408,24 @@ local function report(e)
     end
 end
 
+-- Each runner returns whether it succeeded, plus the error when it raised one.
 local function run_lua(fn)
     local results = table.pack(xpcall(fn, traceback))
     if not results[1] then
         report(results[2])
-        return
+        return false, results[2]
     end
     if results.n > 1 then
         local parts = {}
         for i = 2, results.n do parts[#parts + 1] = format_value(results[i], 0, {}) end
         out(table.concat(parts, "\t"), "\n")
     end
+    return true
 end
 
 local function run_command(word, rest)
     local args, e = split_args(rest)
-    if not args then err(e) return end
+    if not args then err(e) return false end
 
     local fn = C[word]
     if not fn and is_script(word) then
@@ -429,13 +434,93 @@ local function run_command(word, rest)
     end
     if fn then
         local ok, e2 = xpcall(fn, traceback, table.unpack(args))
-        if not ok then report(e2) end
-        return
+        if not ok then report(e2) return false, e2 end
+        return true
     end
 
     local prog = shell.which(word)
-    local ok, e2 = xpcall(launch, traceback, prog, args)
-    if not ok then report(e2) end
+    local ok, result = xpcall(launch, traceback, prog, args)
+    if not ok then report(result) return false, result end
+    return result
+end
+
+local function compile(chunk)
+    local fn, e = load("return " .. chunk, "=stdin")
+    if not fn then fn, e = load(chunk, "=stdin") end
+    return fn, e
+end
+
+local function command_word(line)
+    local word, rest = line:match("^([%w_%.%-/~]+)(.*)$")
+    if word and looks_like_command(word, rest) and (C[word] or is_script(word) or shell.which(word)) then
+        local defined = rawget(_G, word)
+        if not (rest == "" and defined ~= nil and C[word] == nil) then return word, rest end
+    end
+end
+
+local function split_chain(s)
+    local parts, start, op, quote = {}, 1, ";", nil
+    local function cut(stop, next_op)
+        parts[#parts + 1] = { op = op, text = s:sub(start, stop):match("^%s*(.-)%s*$") }
+        op = next_op
+    end
+    local i = 1
+    while i <= #s do
+        local c = s:sub(i, i)
+        if quote then
+            if c == quote then
+                quote = nil
+            elseif c == "\\" and quote == '"' then
+                i = i + 1
+            end
+        elseif c == '"' or c == "'" then
+            quote = c
+        elseif c == "\\" then
+            i = i + 1
+        elseif s:sub(i, i + 1) == "&&" or s:sub(i, i + 1) == "||" then
+            cut(i - 1, s:sub(i, i + 1))
+            i = i + 1
+            start = i + 1
+        elseif c == ";" then
+            cut(i - 1, ";")
+            start = i + 1
+        end
+        i = i + 1
+    end
+    cut(#s)
+    return parts
+end
+
+local function run_one(line)
+    local word, rest = command_word(line)
+    if word then return run_command(word, rest) end
+    if line:match("^[%w_%.%-/~]+$") and rawget(_G, line) == nil then
+        err(line .. ": command not found")
+        return false
+    end
+    if line:sub(1, 1) == "=" then line = "return " .. line:sub(2) end
+    local fn, e = compile(line)
+    if not fn then err(e) return false end
+    return run_lua(fn)
+end
+
+local function run_chain(parts)
+    for i, p in ipairs(parts) do
+        local after = parts[i + 1]
+        if p.text == "" and (p.op ~= ";" or (after and after.op ~= ";")) then
+            err("syntax error near " .. (p.op ~= ";" and p.op or after.op))
+            return
+        end
+    end
+
+    local ok = true
+    for _, p in ipairs(parts) do
+        if p.text ~= "" and (p.op == ";" or (p.op == "&&") == ok) then
+            local e
+            ok, e = run_one(p.text)
+            if not ok and type(e) == "string" and e:find("interrupted") then return end
+        end
+    end
 end
 
 local pending
@@ -446,19 +531,23 @@ function shell.handle(line)
     if not pending then
         local trimmed = line:match("^%s*(.-)%s*$")
         if trimmed == "" then return end
-        local word, rest = trimmed:match("^([%w_%.%-/~]+)(.*)$")
-        if word and looks_like_command(word, rest) and (C[word] or is_script(word) or shell.which(word)) then
-            local defined = rawget(_G, word)
-            if not (rest == "" and defined ~= nil and C[word] == nil) then
-                run_command(word, rest)
+        local parts = split_chain(trimmed)
+        if #parts > 1 then
+            local fn, e = compile(trimmed)
+            if command_word(parts[1].text) or (not fn and not e:match("<eof>$")) then
+                run_chain(parts)
                 return
             end
+        end
+        local word, rest = command_word(trimmed)
+        if word then
+            run_command(word, rest)
+            return
         end
         if trimmed:sub(1, 1) == "=" then chunk = "return " .. trimmed:sub(2) end
     end
 
-    local fn, e = load("return " .. chunk, "=stdin")
-    if not fn then fn, e = load(chunk, "=stdin") end
+    local fn, e = compile(chunk)
     if not fn then
         if e:match("<eof>$") then
             pending = chunk
