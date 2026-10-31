@@ -32,6 +32,8 @@ enum
     SX_REQ_MOVE,
     SX_REQ_RESIZE,
     SX_REQ_RELOAD_SETTINGS,
+    SX_REQ_CLIPBOARD_SET,
+    SX_REQ_CLIPBOARD_GET,
 };
 
 typedef struct
@@ -83,6 +85,16 @@ typedef struct
 }
 SxReqSetVisible;
 
+typedef struct
+{
+    SxMsgHeader hdr;
+    uint32_t    serial;
+    uint32_t    reserved;
+    uint64_t    data;
+    uint64_t    length;
+}
+SxReqClipboard;
+
 enum
 {
     SX_EVT_WELCOME = 100,
@@ -101,6 +113,7 @@ enum
     SX_EVT_CLOSE,
     SX_EVT_BUFFER_RELEASE,
     SX_EVT_THEME_CHANGED,
+    SX_EVT_CLIPBOARD,
 };
 
 typedef struct
@@ -116,6 +129,7 @@ typedef struct
     uint32_t    mods;
     uint32_t    serial;
     uint64_t    buffer;
+    uint64_t    length;
 }
 SxEvtMsg;
 

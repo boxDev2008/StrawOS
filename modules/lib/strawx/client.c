@@ -13,6 +13,9 @@ static struct
     uint32_t  created_serial;
     uint32_t  created_id;
 
+    uint32_t  clipboard_serial;
+    uint64_t  clipboard_len;
+
     uint8_t   rx[SX_RX_MAX];
     size_t    rx_len;
 
@@ -126,8 +129,12 @@ static void sx_handle_message(const SxEvtMsg *m)
             sx_conn.created_id = m->hdr.window;
             return;
 
+        case SX_EVT_CLIPBOARD:
+            sx_conn.clipboard_len = m->length;
+            sx_conn.clipboard_serial = m->serial;
+            return;
+
         case SX_EVT_THEME_CHANGED:
-            // Every app redraws on resize, so a same-size resize repaints it in the new colors.
             sx_theme_load();
             for (SxWindow *w = sx_conn.windows; w; w = w->next)
             {
@@ -491,6 +498,67 @@ void sx_window_resize(SxWindow *win, int width, int height)
     req.w = width;
     req.h = height;
     sx_send(&req, SX_REQ_RESIZE, sizeof(req), win->id);
+}
+
+static bool sx_clipboard_request(uint16_t type, void *data, size_t length, size_t *total)
+{
+    if (!sx_conn.connected && sx_connect() != 0)
+        return false;
+
+    SxReqClipboard req;
+    memset(&req, 0, sizeof(req));
+    req.serial = ++sx_conn.next_serial;
+    req.data = (uint64_t)data;
+    req.length = length;
+
+    sx_conn.clipboard_serial = 0;
+    if (!sx_send(&req, type, sizeof(req), 0))
+        return false;
+
+    while (sx_conn.clipboard_serial != req.serial)
+        if (sx_pump(-1) < 0)
+            return false;
+
+    if (total)
+        *total = (size_t)sx_conn.clipboard_len;
+    return true;
+}
+
+bool sx_clipboard_set(const char *text, size_t length)
+{
+    return sx_clipboard_request(SX_REQ_CLIPBOARD_SET, (void *)text, text ? length : 0, NULL);
+}
+
+char *sx_clipboard_get(size_t *length)
+{
+    size_t total;
+    if (!sx_clipboard_request(SX_REQ_CLIPBOARD_GET, NULL, 0, &total))
+        return NULL;
+
+    for (;;)
+    {
+        char *text = malloc(total + 1);
+        if (!text)
+            return NULL;
+
+        size_t now;
+        if (!sx_clipboard_request(SX_REQ_CLIPBOARD_GET, text, total, &now))
+        {
+            free(text);
+            return NULL;
+        }
+
+        if (now <= total)
+        {
+            text[now] = '\0';
+            if (length)
+                *length = now;
+            return text;
+        }
+
+        free(text);
+        total = now;
+    }
 }
 
 bool sx_pending(void)

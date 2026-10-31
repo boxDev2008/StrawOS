@@ -517,8 +517,6 @@ static struct
     int         click_x, click_y;
     uint64_t    click_time;
     uint32_t    next_user_event;
-
-    char       *clipboard;
 }
 S = { .next_user_event = SDL_EVENT_USER };
 
@@ -1156,24 +1154,16 @@ uint32_t SDL_GetMouseState(float *x, float *y)
     return 0;
 }
 
-/* StrawOS has no system clipboard yet, so copy and paste work within lite-xl */
-
 char *SDL_GetClipboardText(void)
 {
-    return strdup(S.clipboard ? S.clipboard : "");
+    char *text = sx_clipboard_get(NULL);
+    return text ? text : strdup("");
 }
 
 bool SDL_SetClipboardText(const char *text)
 {
-    char *copy = strdup(text);
-    if (!copy)
-        return false;
-    free(S.clipboard);
-    S.clipboard = copy;
-    return true;
+    return sx_clipboard_set(text, text ? strlen(text) : 0);
 }
-
-/* message box: a small modal window with the message and an OK button */
 
 #define BOX_W     460
 #define BOX_PAD   20

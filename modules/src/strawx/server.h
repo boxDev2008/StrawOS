@@ -250,6 +250,9 @@ static struct
     bool          desktop_icons;
     int           pointer_speed;
     int           mouse_frac_x, mouse_frac_y;
+
+    char         *clipboard;
+    size_t        clipboard_len;
 }
 S;
 

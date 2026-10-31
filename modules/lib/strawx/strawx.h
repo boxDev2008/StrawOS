@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "protocol.h"
 #include "gfx.h"
@@ -94,5 +95,8 @@ void      sx_window_resize(SxWindow *win, int width, int height);
 
 int  sx_next_event(SxEvent *ev, int timeout_ms);
 bool sx_pending(void);
+
+bool  sx_clipboard_set(const char *text, size_t length);
+char *sx_clipboard_get(size_t *length);
 
 uint64_t sx_time_ms(void);

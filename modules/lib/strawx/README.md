@@ -169,6 +169,17 @@ values from 256 up (see `protocol.h`).
 When the user switches themes, every window gets an `SX_EVENT_RESIZE` at its current size. Any
 program that redraws on resize therefore picks up the new colors automatically.
 
+## Clipboard
+
+```c
+bool  sx_clipboard_set(const char *text, size_t length);
+char *sx_clipboard_get(size_t *length);
+```
+
+The server keeps one clipboard in memory that every program shares, and it has no size limit.
+`sx_clipboard_get` returns a NUL-terminated copy that you `free`, or NULL if it fails. An empty
+clipboard gives an empty string with `*length` set to 0. `length` may be NULL.
+
 ## Drawing (`gfx.h`)
 
 Colors are built with `SX_RGB(r, g, b)` (opaque) or `SX_RGBA(r, g, b, a)`. Every drawing

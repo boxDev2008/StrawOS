@@ -841,6 +841,29 @@ static void address_key(struct gui_window *g, const SxEvent *ev)
         g->addr_cursor = g->addr_len;
         return;
     }
+    if (ctrl && (ev->key == 'c' || ev->key == 'x'))
+    {
+        sx_clipboard_set(g->address, (size_t)g->addr_len);
+        if (ev->key == 'x')
+        {
+            g->addr_len = g->addr_cursor = 0;
+            g->address[0] = '\0';
+            g->addr_fresh = false;
+        }
+        return;
+    }
+    if (ctrl && ev->key == 'v')
+    {
+        size_t n;
+        char *text = sx_clipboard_get(&n);
+        if (!text)
+            return;
+        for (size_t i = 0; i < n; i++)
+            if (text[i] >= 32 && text[i] < 127)
+                address_insert(g, text[i]);
+        free(text);
+        return;
+    }
     if (!ctrl && ev->ch >= 32 && ev->ch < 127)
         address_insert(g, (char)ev->ch);
 }

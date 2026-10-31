@@ -33,6 +33,13 @@ typedef struct
 }
 Cell;
 
+typedef struct
+{
+    int64_t line;
+    int     col;
+}
+Pos;
+
 static uint32_t palette[18];
 
 // The 16 ANSI colors come from the current theme, followed by the default foreground and background.
@@ -76,6 +83,10 @@ static struct
     bool      cursor_on;
     uint64_t  blink_ms;
     bool      focused;
+
+    Pos       sel_anchor;
+    Pos       sel_end;
+    bool      selecting;
 }
 T;
 
@@ -360,11 +371,176 @@ static void submit_line(void)
     T.edit_len = T.edit_pos = 0;
 }
 
+static void edit_insert(char ch)
+{
+    if (T.edit_len >= EDIT_MAX - 1)
+        return;
+    memmove(T.edit + T.edit_pos + 1, T.edit + T.edit_pos, (size_t)(T.edit_len - T.edit_pos));
+    T.edit[T.edit_pos++] = ch;
+    T.edit_len++;
+}
+
+static int64_t oldest_line(void)
+{
+    return T.total > SCROLLBACK ? T.total - SCROLLBACK : 0;
+}
+
+static int64_t view_first(int64_t *end)
+{
+    int ncols = cols(), nrows = rows();
+
+    int edit_lines = (T.cur_col + T.edit_len) / ncols + 1;
+    int64_t content_end = T.cur_line + edit_lines - 1;
+    if (content_end < T.total - 1)
+        content_end = T.total - 1;
+
+    int64_t oldest = oldest_line();
+    int64_t max_scroll = content_end - nrows + 1 - oldest;
+    if (max_scroll < 0)
+        max_scroll = 0;
+    if (T.scroll > max_scroll)
+        T.scroll = (int)max_scroll;
+
+    int64_t first = content_end - nrows + 1 - T.scroll;
+    if (first < T.screen_top && T.scroll == 0)
+        first = T.screen_top;
+    if (first < oldest)
+        first = oldest;
+
+    if (end)
+        *end = content_end;
+    return first;
+}
+
+static Pos pos_at(int x, int y)
+{
+    int64_t end;
+    int64_t first = view_first(&end);
+    int row = y < PAD_Y ? -1 : (y - PAD_Y) / line_h();
+    int col = x < PAD_X ? 0 : (x - PAD_X + char_w() / 2) / char_w();
+    if (col > cols())
+        col = cols();
+
+    Pos p = { first + row, col };
+    if (p.line < oldest_line())
+        p = (Pos){ oldest_line(), 0 };
+    if (p.line > end)
+        p = (Pos){ end, cols() };
+    return p;
+}
+
+static int pos_cmp(Pos a, Pos b)
+{
+    if (a.line != b.line)
+        return a.line < b.line ? -1 : 1;
+    return a.col - b.col;
+}
+
+static bool has_selection(void)
+{
+    return pos_cmp(T.sel_anchor, T.sel_end) != 0;
+}
+
+static void clear_selection(void)
+{
+    T.sel_end = T.sel_anchor;
+    T.selecting = false;
+}
+
+static bool is_selected(int64_t line, int col)
+{
+    if (!has_selection())
+        return false;
+    bool fwd = pos_cmp(T.sel_anchor, T.sel_end) < 0;
+    Pos s = fwd ? T.sel_anchor : T.sel_end, e = fwd ? T.sel_end : T.sel_anchor;
+    Pos p = { line, col };
+    return pos_cmp(p, s) >= 0 && pos_cmp(p, e) < 0;
+}
+
+static char cell_char(int64_t line, int col)
+{
+    int64_t pos = (line - T.cur_line) * cols() + col - T.cur_col;
+    if (pos >= 0 && pos < T.edit_len)
+        return T.edit[pos];
+    if (line >= T.total)
+        return ' ';
+    return line_at(line)[col].ch;
+}
+
+static void copy_selection(void)
+{
+    if (!has_selection())
+        return;
+
+    bool fwd = pos_cmp(T.sel_anchor, T.sel_end) < 0;
+    Pos s = fwd ? T.sel_anchor : T.sel_end, e = fwd ? T.sel_end : T.sel_anchor;
+    if (s.line < oldest_line())
+        s = (Pos){ oldest_line(), 0 };
+
+    int ncols = cols();
+    char *text = malloc((size_t)(e.line - s.line + 1) * (size_t)(ncols + 1));
+    if (!text)
+        return;
+
+    size_t len = 0;
+    for (int64_t ln = s.line; ln <= e.line; ln++)
+    {
+        int c0 = ln == s.line ? s.col : 0;
+        int c1 = ln == e.line ? e.col : ncols;
+        if (c1 > ncols)
+            c1 = ncols;
+
+        size_t start = len;
+        for (int col = c0; col < c1; col++)
+            text[len++] = cell_char(ln, col);
+        while (len > start && text[len - 1] == ' ')
+            len--;
+        if (ln != e.line)
+            text[len++] = '\n';
+    }
+
+    sx_clipboard_set(text, len);
+    free(text);
+}
+
+static void paste(void)
+{
+    size_t n;
+    char *text = sx_clipboard_get(&n);
+    if (!text)
+        return;
+
+    for (size_t i = 0; i < n; i++)
+    {
+        char ch = text[i];
+        if (ch == '\n')
+            submit_line();
+        else if (ch == '\t')
+            edit_insert(' ');
+        else if (ch >= 32 && ch < 127)
+            edit_insert(ch);
+    }
+    free(text);
+    T.scroll = 0;
+}
+
 static void handle_key(const SxEvent *ev)
 {
     bool ctrl = ev->mods & SX_MOD_CTRL;
     bool shift = ev->mods & SX_MOD_SHIFT;
 
+    if (ctrl && ev->key == 'c' && (shift || has_selection()))
+    {
+        copy_selection();
+        if (!shift)
+            clear_selection();
+        return;
+    }
+    if (ctrl && ev->key == 'v')
+    {
+        paste();
+        return;
+    }
     if (ctrl && ev->key == 'c')
     {
         feed_str("^C\n");
@@ -457,12 +633,8 @@ static void handle_key(const SxEvent *ev)
     int count = ev->key == SX_KEY_TAB ? 4 : 1;
     if (ch >= 32 && ch < 127 && !ctrl)
     {
-        for (int k = 0; k < count && T.edit_len < EDIT_MAX - 1; k++)
-        {
-            memmove(T.edit + T.edit_pos + 1, T.edit + T.edit_pos, (size_t)(T.edit_len - T.edit_pos));
-            T.edit[T.edit_pos++] = (char)ch;
-            T.edit_len++;
-        }
+        for (int k = 0; k < count; k++)
+            edit_insert((char)ch);
         T.scroll = 0;
     }
 }
@@ -496,24 +668,8 @@ static void draw(void)
 
     int cw = char_w(), lh = line_h();
     int ncols = cols(), nrows = rows();
-
-    int edit_lines = (T.cur_col + T.edit_len) / ncols + 1;
-    int64_t content_end = T.cur_line + edit_lines - 1;
-    if (content_end < T.total - 1)
-        content_end = T.total - 1;
-
-    int64_t oldest = T.total > SCROLLBACK ? T.total - SCROLLBACK : 0;
-    int64_t max_scroll = content_end - nrows + 1 - oldest;
-    if (max_scroll < 0)
-        max_scroll = 0;
-    if (T.scroll > max_scroll)
-        T.scroll = (int)max_scroll;
-
-    int64_t first = content_end - nrows + 1 - T.scroll;
-    if (first < T.screen_top && T.scroll == 0)
-        first = T.screen_top;
-    if (first < oldest)
-        first = oldest;
+    int64_t first = view_first(NULL);
+    uint32_t sel_bg = SX_THEME_ACCENT_A(70);
 
     char run[MAX_COLS];
     for (int r = 0; r < nrows; r++)
@@ -530,6 +686,8 @@ static void draw(void)
             cell_colors(&line[col], &fg, &bg);
             if (bg != palette[COLOR_DEFAULT_BG])
                 sx_fill_rect(c, PAD_X + col * cw, y, cw, lh, bg);
+            if (is_selected(ln, col))
+                sx_fill_rect(c, PAD_X + col * cw, y, cw, lh, sel_bg);
         }
 
         int col = 0;
@@ -567,6 +725,8 @@ static void draw(void)
         {
             char ch = T.edit[i];
             sx_fill_rect(c, PAD_X + col * cw, PAD_Y + r * lh, cw, lh, palette[COLOR_DEFAULT_BG]);
+            if (is_selected(ln, col))
+                sx_fill_rect(c, PAD_X + col * cw, PAD_Y + r * lh, cw, lh, sel_bg);
             draw_cell_run(c, PAD_X + col * cw, PAD_Y + r * lh, &ch, 1, palette[COLOR_DEFAULT_FG]);
         }
         if (i == T.edit_pos)
@@ -731,6 +891,30 @@ int main(int argc, char **argv)
                     T.cursor_on = true;
                     T.blink_ms = sx_time_ms();
                     dirty = true;
+                    break;
+                case SX_EVENT_MOUSE_DOWN:
+                    if (ev.button == SX_BUTTON_LEFT)
+                    {
+                        T.sel_anchor = T.sel_end = pos_at(ev.x, ev.y);
+                        T.selecting = true;
+                        dirty = true;
+                    }
+                    else if (ev.button == SX_BUTTON_MIDDLE)
+                    {
+                        paste();
+                        dirty = true;
+                    }
+                    break;
+                case SX_EVENT_MOUSE_MOVE:
+                    if (T.selecting)
+                    {
+                        T.sel_end = pos_at(ev.x, ev.y);
+                        dirty = true;
+                    }
+                    break;
+                case SX_EVENT_MOUSE_UP:
+                    if (ev.button == SX_BUTTON_LEFT)
+                        T.selecting = false;
                     break;
                 case SX_EVENT_MOUSE_WHEEL:
                     T.scroll += ev.wheel * 3;

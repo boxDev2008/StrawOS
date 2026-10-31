@@ -271,9 +271,6 @@ static struct
     bool  run_hover, run_down;
     char  status[128];
     uint64_t status_ms;
-
-    char *clipboard;
-    int   clip_len;
 }
 E;
 
@@ -674,13 +671,18 @@ static void copy_selection(void)
 {
     if (!has_selection())
         return;
-    int n = sel_end() - sel_start();
-    free(E.clipboard);
-    E.clipboard = malloc((size_t)n + 1);
-    if (!E.clipboard)
+    sx_clipboard_set(E.text + sel_start(), (size_t)(sel_end() - sel_start()));
+}
+
+static void paste(void)
+{
+    size_t n;
+    char *text = sx_clipboard_get(&n);
+    if (!text)
         return;
-    memcpy(E.clipboard, E.text + sel_start(), (size_t)n);
-    E.clip_len = n;
+    if (n)
+        insert_text(text, (int)n);
+    free(text);
 }
 
 static void handle_key(const SxEvent *ev)
@@ -699,7 +701,7 @@ static void handle_key(const SxEvent *ev)
             case 'a': E.anchor = 0; E.cursor = E.len; return;
             case 'c': copy_selection(); return;
             case 'x': copy_selection(); delete_selection(); return;
-            case 'v': if (E.clipboard) insert_text(E.clipboard, E.clip_len); return;
+            case 'v': paste(); return;
             case SX_KEY_HOME: move_to(0, shift); return;
             case SX_KEY_END:  move_to(E.len, shift); return;
             default: break;

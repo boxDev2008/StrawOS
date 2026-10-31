@@ -69,6 +69,36 @@ static void client_disconnect(Client *c)
     update_hover();
 }
 
+static void clipboard_handle(Client *c, uint16_t type, const SxReqClipboard *req)
+{
+    if (type == SX_REQ_CLIPBOARD_SET)
+    {
+        char *text = malloc((size_t)req->length + 1);
+        if (text)
+        {
+            if (req->length)
+                memcpy(text, (const void *)req->data, (size_t)req->length);
+            text[req->length] = '\0';
+            free(S.clipboard);
+            S.clipboard = text;
+            S.clipboard_len = (size_t)req->length;
+        }
+    }
+    else if (req->data && S.clipboard_len)
+    {
+        size_t n = S.clipboard_len < req->length ? S.clipboard_len : (size_t)req->length;
+        memcpy((void *)req->data, S.clipboard, n);
+    }
+
+    SxEvtMsg ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.hdr.type = SX_EVT_CLIPBOARD;
+    ev.hdr.size = sizeof(ev);
+    ev.serial = req->serial;
+    ev.length = S.clipboard_len;
+    send_raw(c, &ev, sizeof(ev));
+}
+
 static void client_handle(Client *c, const SxMsgHeader *hdr)
 {
     Window *w = hdr->window ? window_by_id(c, hdr->window) : NULL;
@@ -199,6 +229,12 @@ static void client_handle(Client *c, const SxMsgHeader *hdr)
             S.desktop_selected = -1;
             S.desktop_hover = -1;
             damage_all();
+            break;
+
+        case SX_REQ_CLIPBOARD_SET:
+        case SX_REQ_CLIPBOARD_GET:
+            if (hdr->size >= sizeof(SxReqClipboard))
+                clipboard_handle(c, hdr->type, (const SxReqClipboard *)hdr);
             break;
 
         case SX_REQ_RESIZE:

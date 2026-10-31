@@ -204,6 +204,44 @@ static bool field_key(Field *f, const SxEvent *ev)
         default:
             break;
     }
+    if ((ev->mods & SX_MOD_CTRL) && (ev->key == 'c' || ev->key == 'x'))
+    {
+        sx_clipboard_set(f->text, (size_t)f->len);
+        if (ev->key == 'x')
+        {
+            f->len = f->cursor = 0;
+            f->text[0] = '\0';
+        }
+        return false;
+    }
+    if ((ev->mods & SX_MOD_CTRL) && ev->key == 'v')
+    {
+        size_t n;
+        char *text = sx_clipboard_get(&n);
+        if (!text)
+            return false;
+        int room = (int)sizeof(f->text) - 1 - f->len;
+        int len = 0;
+        size_t i = 0;
+        for (; i < n && len < room; i++)
+        {
+            unsigned char c = (unsigned char)text[i];
+            if (c == '\n' || c == '\t')
+                text[len++] = ' ';
+            else if (c >= 32 && c != 127)
+                text[len++] = (char)c;
+        }
+        if (i < n)
+        {
+            while (len > 0 && ((unsigned char)text[len - 1] & 0xC0) == 0x80)
+                len--;
+            if (len > 0 && ((unsigned char)text[len - 1] & 0xC0) == 0xC0)
+                len--;
+        }
+        field_insert(f, text, len);
+        free(text);
+        return false;
+    }
     if ((ev->mods & SX_MOD_CTRL) && (ev->ch == 'u' || ev->ch == 'U' || ev->ch == 21))
     {
         f->len = f->cursor = 0;

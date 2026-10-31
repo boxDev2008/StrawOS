@@ -176,22 +176,23 @@ static struct gui_utf8_table utf8_table = {
     .local_to_utf8 = utf8_passthrough,
 };
 
-static char *clipboard_text;
-static size_t clipboard_len;
-
 static void clipboard_get(char **buffer, size_t *length)
 {
-    *buffer = clipboard_text ? strndup(clipboard_text, clipboard_len) : NULL;
-    *length = *buffer ? clipboard_len : 0;
+    *buffer = sx_clipboard_get(length);
+    if (*buffer && *length == 0)
+    {
+        free(*buffer);
+        *buffer = NULL;
+    }
+    if (!*buffer)
+        *length = 0;
 }
 
 static void clipboard_set(const char *buffer, size_t length, nsclipboard_styles styles[], int n_styles)
 {
     (void)styles;
     (void)n_styles;
-    free(clipboard_text);
-    clipboard_text = strndup(buffer, length);
-    clipboard_len = clipboard_text ? length : 0;
+    sx_clipboard_set(buffer, length);
 }
 
 static struct gui_clipboard_table clipboard_table = {
