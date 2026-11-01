@@ -50,3 +50,6 @@
 [submodule "modules/lib/pcre2"]
 	path = modules/lib/pcre2
 	url = https://github.com/PCRE2Project/pcre2
+[submodule "modules/lib/classicube"]
+	path = modules/lib/classicube
+	url = https://github.com/ClassiCube/ClassiCube
