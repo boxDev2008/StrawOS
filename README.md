@@ -27,6 +27,7 @@
 - **TinyCC**: compile C programs
 - **Lite XL**: code editor with split panes and drag-and-drop tabs, ported to StrawX and Lua 5.5
 - **Discord**: an experimental client
+- **ClassiCube**: Minecraft Classic client with singleplayer and multiplayer, ported to StrawX (software renderer)
 - `fetch`: a command-line HTTP(S) downloader
 
 ## Building

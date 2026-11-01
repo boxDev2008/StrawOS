@@ -214,6 +214,7 @@ int main(void)
 
         shell_tick();
         anim_tick();
+        pointer_grab_update();
 
         if (S.damage_count)
             compose();

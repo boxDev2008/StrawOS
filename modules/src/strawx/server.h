@@ -112,6 +112,7 @@ struct Window
 
     int       workspace;
     bool      snapped;
+    bool      pointer_grab;
 
     AnimSnap  close_snap;
     uint64_t  close_snap_ms;
@@ -203,6 +204,7 @@ static struct
     CursorKind    cursor;
     SxRect        cursor_rect;
     Window       *hover_win;
+    Window       *grab_win;      // window the pointer is currently grabbed by, if any
     HitZone       hover_zone;
     Window       *hover_frame_win;
 

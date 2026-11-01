@@ -718,8 +718,70 @@ static void handle_other_button(uint32_t button, bool pressed)
         send_pointer_event(target, pressed ? SX_EVT_MOUSE_DOWN : SX_EVT_MOUSE_UP, button, 0);
 }
 
+static void pointer_grab_update(void)
+{
+    Window *g = pointer_grabber();
+    if (g == S.grab_win)
+        return;
+
+    if (S.grab_win)
+        send_pointer_event(S.grab_win, SX_EVT_MOUSE_LEAVE, 0, 0);
+    S.grab_win = g;
+    if (g)
+    {
+        set_hover_window(NULL);
+        S.mx = g->x + g->w / 2;
+        S.my = g->y + g->h / 2;
+        cursor_set(CURSOR_ARROW);
+        cursor_moved();
+    }
+    else
+    {
+        update_hover();
+    }
+    damage_add(S.cursor_rect);
+}
+
+static void handle_grabbed_mouse_event(Window *g, const MouseEvent *ev)
+{
+    int pct = S.pointer_speed < 10 ? 10 : (S.pointer_speed > 400 ? 400 : S.pointer_speed);
+    S.mouse_frac_x += ev->dx * pct;
+    S.mouse_frac_y += ev->dy * pct;
+    int dx = S.mouse_frac_x / 100, dy = S.mouse_frac_y / 100;
+    S.mouse_frac_x -= dx * 100;
+    S.mouse_frac_y -= dy * 100;
+
+    if (dx || dy)
+    {
+        SxEvtMsg m;
+        memset(&m, 0, sizeof(m));
+        m.x = dx;
+        m.y = dy;
+        m.buttons = ev->buttons;
+        m.mods = S.mods;
+        send_event(g, SX_EVT_MOUSE_RELATIVE, &m);
+    }
+
+    uint8_t changed = (uint8_t)(ev->buttons ^ S.buttons);
+    S.buttons = ev->buttons;
+    static const uint32_t buttons[] = { SX_BUTTON_LEFT, SX_BUTTON_RIGHT, SX_BUTTON_MIDDLE };
+    for (int i = 0; i < 3; i++)
+        if (changed & buttons[i])
+            send_pointer_event(g, (ev->buttons & buttons[i]) ? SX_EVT_MOUSE_DOWN : SX_EVT_MOUSE_UP, buttons[i], 0);
+
+    if (ev->wheel)
+        send_pointer_event(g, SX_EVT_MOUSE_WHEEL, 0, ev->wheel);
+}
+
 static void handle_mouse_event(const MouseEvent *ev)
 {
+    pointer_grab_update();
+    if (S.grab_win)
+    {
+        handle_grabbed_mouse_event(S.grab_win, ev);
+        return;
+    }
+
     int pct = S.pointer_speed < 10 ? 10 : (S.pointer_speed > 400 ? 400 : S.pointer_speed);
     S.mouse_frac_x += ev->dx * pct;
     S.mouse_frac_y += ev->dy * pct;

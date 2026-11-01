@@ -231,16 +231,65 @@ char *strncat(char *dst, const char *src, size_t n)
     return dst;
 }
 
-// TODO(box): add the correct error codes for straw os
 static const char *const _errmsgs[] = {
-    "Success"
+    [0]               = "Success",
+    [EPERM]           = "Operation not permitted",
+    [ENOENT]          = "No such file or directory",
+    [ESRCH]           = "No such process",
+    [EINTR]           = "Interrupted system call",
+    [EIO]             = "Input/output error",
+    [ENXIO]           = "No such device or address",
+    [E2BIG]           = "Argument list too long",
+    [ENOEXEC]         = "Exec format error",
+    [EBADF]           = "Bad file descriptor",
+    [EAGAIN]          = "Resource temporarily unavailable",
+    [ENOMEM]          = "Out of memory",
+    [EACCES]          = "Permission denied",
+    [EEXIST]          = "File exists",
+    [ENOTDIR]         = "Not a directory",
+    [EISDIR]          = "Is a directory",
+    [EINVAL]          = "Invalid argument",
+    [EMFILE]          = "Too many open files",
+    [ENOTTY]          = "Inappropriate ioctl for device",
+    [EFBIG]           = "File too large",
+    [ENOSPC]          = "No space left on device",
+    [ESPIPE]          = "Illegal seek",
+    [EROFS]           = "Read-only file system",
+    [EMLINK]          = "Too many links",
+    [EPIPE]           = "Broken pipe",
+    [EDOM]            = "Numerical argument out of domain",
+    [ERANGE]          = "Numerical result out of range",
+    [EDEADLK]         = "Resource deadlock avoided",
+    [ENAMETOOLONG]    = "File name too long",
+    [ENOSYS]          = "Function not implemented",
+    [ENOTEMPTY]       = "Directory not empty",
+    [ELOOP]           = "Too many levels of symbolic links",
+    [ENODATA]         = "No data available",
+    [EOVERFLOW]       = "Value too large for defined data type",
+    [EILSEQ]          = "Invalid or incomplete multibyte or wide character",
+    [ENOTSOCK]        = "Socket operation on non-socket",
+    [EPROTONOSUPPORT] = "Protocol not supported",
+    [EOPNOTSUPP]      = "Operation not supported",
+    [EAFNOSUPPORT]    = "Address family not supported by protocol",
+    [EADDRINUSE]      = "Address already in use",
+    [ENETDOWN]        = "Network is down",
+    [ECONNRESET]      = "Connection reset by peer",
+    [ENOBUFS]         = "No buffer space available",
+    [EISCONN]         = "Transport endpoint is already connected",
+    [ENOTCONN]        = "Transport endpoint is not connected",
+    [ETIMEDOUT]       = "Connection timed out",
+    [ECONNREFUSED]    = "Connection refused",
+    [EHOSTUNREACH]    = "No route to host",
+    [EALREADY]        = "Operation already in progress",
+    [EINPROGRESS]     = "Operation now in progress",
+    [ECANCELED]       = "Operation canceled",
 };
 #define _NERR (sizeof(_errmsgs) / sizeof(_errmsgs[0]))
 
 char *strerror(int errnum)
 {
     static char buf[32];
-    if (errnum >= 0 && (size_t)errnum < _NERR)
+    if (errnum >= 0 && (size_t)errnum < _NERR && _errmsgs[errnum])
         return (char *)_errmsgs[errnum];
     const char *prefix = "Unknown error: ";
     char *p = buf;

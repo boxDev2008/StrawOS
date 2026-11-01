@@ -7,6 +7,8 @@
 #define SOCK_TCP      0x10
 #define SOCK_UDP      0x20
 
+#define SOCK_IOCTL_NONBLOCK 0x534b01
+
 int socket(uint32_t flags);
 int bind(int fd, const char *name);
 int listen(int fd);

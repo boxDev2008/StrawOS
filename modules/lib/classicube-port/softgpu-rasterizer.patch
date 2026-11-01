@@ -1,0 +1,134 @@
+--- a/Graphics_SoftGPU.c	2026-11-01 13:10:24.119339190 +0200
++++ b/Graphics_SoftGPU.c	2026-11-01 13:12:53.904838261 +0200
+@@ -553,19 +553,50 @@
+ 	b2 = BitmapCol_B(tColor); \
+ 	B  = ( b1 * b2 ) >> 8;    \
+ 
++/* Coverage is decided with exact 64 bit edge functions evaluated at pixel centres.        */
++/* Big quads near the camera (e.g. the water and bedrock planes around the map) project   */
++/* vertices millions of pixels off screen: in 32 bit ints the edge products overflowed,   */
++/* flipping triangles' winding so they were culled (leaving holes), and float rounding    */
++/* left cracks along shared edges. Pixels exactly on an edge go to one triangle only      */
++/* (top-left style rule), so translucent surfaces are not blended twice along diagonals.  */
++#define SCREEN_COORD_MAX 268435456.0f /* 2^28: keeps every edge product below 2^61 */
++
++static CC_INLINE int ScreenCoord(float v) {
++	if (v >  SCREEN_COORD_MAX) return  (int)SCREEN_COORD_MAX;
++	if (v < -SCREEN_COORD_MAX) return -(int)SCREEN_COORD_MAX;
++	return (int)v;
++}
++
++/* twice the edge function of a->b at the centre of pixel (px, py) */
++static CC_INLINE cc_int64 EdgeAtCentre(int ax, int ay, int bx, int by, int px, int py) {
++	return (cc_int64)(bx - ax) * (2 * py + 1 - 2 * ay) - (cc_int64)(by - ay) * (2 * px + 1 - 2 * ax);
++}
++
++/* 0 when edge a->b owns the pixel centres lying exactly on it, -1 otherwise */
++static CC_INLINE int EdgeBias(int ax, int ay, int bx, int by) {
++	return (by > ay || (by == ay && bx < ax)) ? 0 : -1;
++}
++
+ static void DrawTriangle3D(Vertex* V0, Vertex* V1, Vertex* V2) {
+-	int x0 = (int)V0->x, y0 = (int)V0->y;
+-	int x1 = (int)V1->x, y1 = (int)V1->y;
+-	int x2 = (int)V2->x, y2 = (int)V2->y;
++	int x0 = ScreenCoord(V0->x), y0 = ScreenCoord(V0->y);
++	int x1 = ScreenCoord(V1->x), y1 = ScreenCoord(V1->y);
++	int x2 = ScreenCoord(V2->x), y2 = ScreenCoord(V2->y);
+ 	int minX = min(x0, min(x1, x2));
+ 	int minY = min(y0, min(y1, y2));
+ 	int maxX = max(x0, max(x1, x2));
+ 	int maxY = max(y0, max(y1, y2));
+ 
+-	int area = edgeFunction(x0,y0, x1,y1, x2,y2);
+-	if (faceCulling) {
++	cc_int64 area = (cc_int64)(x1 - x0) * (y2 - y0) - (cc_int64)(y1 - y0) * (x2 - x0);
++	if (area == 0) return; /* degenerate */
++	if (area < 0) {
+ 		// https://gamedev.stackexchange.com/questions/203694/how-to-make-backface-culling-work-correctly-in-both-orthographic-and-perspective
+-		if (area < 0) return;
++		if (faceCulling) return;
++		/* make the winding positive so one coverage rule serves both orientations */
++		Vertex* tv = V1; V1 = V2; V2 = tv;
++		int t;
++		t = x1; x1 = x2; x2 = t;
++		t = y1; y1 = y2; y2 = t;
++		area = -area;
+ 	}
+ 
+ 	// Reject triangles completely outside
+@@ -577,7 +608,7 @@
+ 	minY = max(minY, 0); maxY = min(maxY, fb_maxY);
+ 
+ 	// NOTE: W in frag variables below is actually 1/W 
+-	float factor = 1.0f / area;
++	double factor = 1.0 / (2.0 * (double)area); /* edge values below are doubled */
+ 	float w0 = V0->w, w1 = V1->w, w2 = V2->w;
+ 	
+ 	// TODO proper clipping
+@@ -593,13 +624,13 @@
+ 	
+ 	// https://fgiesen.wordpress.com/2013/02/10/optimizing-the-basic-rasterizer/
+ 	// Essentially these are the deltas of edge functions between X/Y and X/Y + 1 (i.e. one X/Y step)
+-	int dx01  = y0 - y1, dy01 = x1 - x0;
+-	int dx12  = y1 - y2, dy12 = x2 - x1;
+-	int dx20  = y2 - y0, dy20 = x0 - x2;
+-
+-	float bc0_start = edgeFunction(x1,y1, x2,y2, minX+0.5f,minY+0.5f);
+-	float bc1_start = edgeFunction(x2,y2, x0,y0, minX+0.5f,minY+0.5f);
+-	float bc2_start = edgeFunction(x0,y0, x1,y1, minX+0.5f,minY+0.5f);
++	cc_int64 dx01 = 2 * (cc_int64)(y0 - y1), dy01 = 2 * (cc_int64)(x1 - x0);
++	cc_int64 dx12 = 2 * (cc_int64)(y1 - y2), dy12 = 2 * (cc_int64)(x2 - x1);
++	cc_int64 dx20 = 2 * (cc_int64)(y2 - y0), dy20 = 2 * (cc_int64)(x0 - x2);
++
++	cc_int64 bc0_start = EdgeAtCentre(x1,y1, x2,y2, minX,minY) + EdgeBias(x1,y1, x2,y2);
++	cc_int64 bc1_start = EdgeAtCentre(x2,y2, x0,y0, minX,minY) + EdgeBias(x2,y2, x0,y0);
++	cc_int64 bc2_start = EdgeAtCentre(x0,y0, x1,y1, minX,minY) + EdgeBias(x0,y0, x1,y1);
+ 
+ 	int R, G, B, A, x, y;
+ 	int a1, r1, g1, b1;
+@@ -624,16 +655,16 @@
+ 
+ 	for (y = minY; y <= maxY; y++, bc0_start += dy12, bc1_start += dy20, bc2_start += dy01) 
+ 	{
+-		float bc0 = bc0_start;
+-		float bc1 = bc1_start;
+-		float bc2 = bc2_start;
++		cc_int64 bc0 = bc0_start;
++		cc_int64 bc1 = bc1_start;
++		cc_int64 bc2 = bc2_start;
+ 
+ 		for (x = minX; x <= maxX; x++, bc0 += dx12, bc1 += dx20, bc2 += dx01) 
+ 		{
+-			float ic0 = bc0 * factor;
+-			float ic1 = bc1 * factor;
+-			float ic2 = bc2 * factor;
+-			if (ic0 < 0 || ic1 < 0 || ic2 < 0) continue;
++			if ((bc0 | bc1 | bc2) < 0) continue;
++			float ic0 = (float)(bc0 * factor);
++			float ic1 = (float)(bc1 * factor);
++			float ic2 = (float)(bc2 * factor);
+ 			int db_index = y * db_stride + x;
+ 
+ 			float w = 1 / (ic0 * w0 + ic1 * w1 + ic2 * w2);
+@@ -687,6 +718,11 @@
+ 
+ // https://github.com/behindthepixels/EDXRaster/blob/master/EDXRaster/Core/Clipper.h
+ static void ClipLine(Vertex* v1, Vertex* v2, Vertex* V) {
++	PackedCol col = v1->c;
++	/* Neighbouring quads clip a shared edge from opposite ends. Interpolating from the  */
++	/* clipped (z < 0) end in both gives bit-identical points, so their edges still meet */
++	if (v1->z >= 0.0f) { Vertex* tmp = v1; v1 = v2; v2 = tmp; }
++
+ 	float t  = Math_AbsF(v1->z / (v2->z - v1->z));
+ 	float invt = 1.0f - t;
+ 	
+@@ -698,7 +734,7 @@
+ 	
+ 	V->u = invt * v1->u + t * v2->u;
+ 	V->v = invt * v1->v + t * v2->v;
+-	V->c = v1->c;
++	V->c = col;
+ }
+ 
+ // https://casual-effects.com/research/McGuire2011Clipping/clip.glsl

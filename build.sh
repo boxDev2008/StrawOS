@@ -44,6 +44,8 @@ cp -r modules/obj/tcc-sysroot/. build/root/
 mkdir -p build/root/share/netsurf build/root/share/fonts
 cp -r modules/obj/nsgen/res/. build/root/share/netsurf/
 cp -r modules/obj/lite-xl-data build/root/share/lite-xl
+mkdir -p build/root/share/classicube/texpacks
+cp modules/obj/classicube-res/classicube.zip build/root/share/classicube/texpacks/
 for f in NotoSans-Regular NotoSans-Bold NotoSans-Italic NotoSans-BoldItalic NotoSans-Light \
          NotoSerif-Regular NotoSerif-Bold NotoSerif-Italic NotoSerif-BoldItalic \
          NotoSansMono-Regular NotoSansMono-Bold; do

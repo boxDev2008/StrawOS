@@ -2,6 +2,8 @@
 #define SOCK_TCP      0x10
 #define SOCK_UDP      0x20
 
+#define SOCK_IOCTL_NONBLOCK 0x534b01
+
 #define SOCK_NAME_MAX 64
 #define SOCK_BUF_SIZE (64 * 1024)
 #define SOCK_BACKLOG  32

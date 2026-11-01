@@ -95,6 +95,12 @@ static bool window_visible(Window *w)
     return w && w->used && w->mapped && !w->hidden && !w->minimized && w->workspace == S.workspace;
 }
 
+static Window *pointer_grabber(void)
+{
+    Window *w = S.focused;
+    return window_visible(w) && w->pointer_grab && !S.menu_open && S.drag == DRAG_NONE ? w : NULL;
+}
+
 static SxRect titlebar_button_rect(Window *w, HitZone zone)
 {
     SxRect f = window_frame_rect(w);
@@ -614,7 +620,7 @@ static void compose_rect(SxRect r)
     if (S.menu_level > 0.0f)
         draw_faded(c, menu_outer_rect(), shell_draw_menu, S.menu_level);
 
-    if (!sx_rect_empty(sx_rect_intersect(S.cursor_rect, r)))
+    if (!S.grab_win && !sx_rect_empty(sx_rect_intersect(S.cursor_rect, r)))
         draw_cursor(c);
 
     flush_rect(r);

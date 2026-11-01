@@ -1,0 +1,89 @@
+--- a/EnvRenderer.c	2026-11-01 13:16:08.182376204 +0200
++++ b/EnvRenderer.c	2026-11-01 13:16:08.190789238 +0200
+@@ -614,13 +614,28 @@
+ 	return r;
+ }
+ 
++/* The area around the map is a 3x3 grid of rectangles minus the middle one. With fewer, */
++/* larger rectangles, corners of some lie in the middle of others' edges (T-junctions),   */
++/* which rasterizers without subpixel precision (the software one) show as dotted cracks. */
++#define BORDER_RECTS 8
+ static void CalcBorderRects(Rect2D* rects) {
+ 	int extent = Utils_AdjViewDist(Game_ViewDistance);
+-	rects[0] = EnvRenderer_Rect(-extent, -extent,      extent + World.Width + extent, extent);
+-	rects[1] = EnvRenderer_Rect(-extent, World.Length, extent + World.Width + extent, extent);
++	int xs[3], ws[3], zs[3], ls[3];
++	int i, j, n = 0;
+ 
+-	rects[2] = EnvRenderer_Rect(-extent,     0, extent, World.Length);
+-	rects[3] = EnvRenderer_Rect(World.Width, 0, extent, World.Length);
++	xs[0] = -extent;      ws[0] = extent;
++	xs[1] = 0;            ws[1] = World.Width;
++	xs[2] = World.Width;  ws[2] = extent;
++	zs[0] = -extent;      ls[0] = extent;
++	zs[1] = 0;            ls[1] = World.Length;
++	zs[2] = World.Length; ls[2] = extent;
++
++	for (j = 0; j < 3; j++) {
++		for (i = 0; i < 3; i++) {
++			if (i == 1 && j == 1) continue; /* the map itself */
++			rects[n++] = EnvRenderer_Rect(xs[i], zs[j], ws[i], ls[j]);
++		}
++	}
+ }
+ 
+ static void UpdateBorderTextures(void) {
+@@ -702,7 +717,7 @@
+ }
+ 
+ static CC_NOINLINE void BuildMapSides(void) {
+-	Rect2D rects[4], r;
++	Rect2D rects[BORDER_RECTS], r;
+ 	BlockID block;
+ 	PackedCol color;
+ 	int y, y1, y2;
+@@ -717,7 +732,7 @@
+ 	CalcBorderRects(rects);
+ 
+ 	sides_vertices = 0;
+-	for (i = 0; i < 4; i++) {
++	for (i = 0; i < BORDER_RECTS; i++) {
+ 		r = rects[i];
+ 		sides_vertices += CalcNumVertices(r.width, r.height); /* YQuads outside */
+ 	}
+@@ -737,7 +752,7 @@
+ 	color = sides_fullBright ? PACKEDCOL_WHITE : Env.ShadowCol;
+ 	Block_Tint(color, block)
+ 
+-	for (i = 0; i < 4; i++) {
++	for (i = 0; i < BORDER_RECTS; i++) {
+ 		r = rects[i];
+ 		DrawBorderY(r.x, r.y, r.x + r.width, r.y + r.height, (float)y, color,
+ 			0, Borders_YOffset(block), &data);
+@@ -757,7 +772,7 @@
+ }
+ 
+ static CC_NOINLINE void BuildMapEdges(void) {
+-	Rect2D rects[4], r;
++	Rect2D rects[BORDER_RECTS], r;
+ 	BlockID block;
+ 	PackedCol color;
+ 	float y;
+@@ -772,7 +787,7 @@
+ 	CalcBorderRects(rects);
+ 
+ 	edges_vertices = 0;
+-	for (i = 0; i < 4; i++) {
++	for (i = 0; i < BORDER_RECTS; i++) {
+ 		r = rects[i];
+ 		edges_vertices += CalcNumVertices(r.width, r.height); /* YPlanes outside */
+ 	}
+@@ -788,7 +803,7 @@
+ 	Block_Tint(color, block)
+ 
+ 	y = (float)Env.EdgeHeight;
+-	for (i = 0; i < 4; i++) {
++	for (i = 0; i < BORDER_RECTS; i++) {
+ 		r = rects[i];
+ 		DrawBorderY(r.x, r.y, r.x + r.width, r.y + r.height, y, color,
+ 			Borders_HorOffset(block), Borders_YOffset(block), &data);

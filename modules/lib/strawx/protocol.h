@@ -34,6 +34,7 @@ enum
     SX_REQ_RELOAD_SETTINGS,
     SX_REQ_CLIPBOARD_SET,
     SX_REQ_CLIPBOARD_GET,
+    SX_REQ_GRAB_POINTER,
 };
 
 typedef struct
@@ -85,6 +86,15 @@ typedef struct
 }
 SxReqSetVisible;
 
+/* while a window holds the grab and has focus, the cursor is hidden and frozen, and mouse
+   motion reaches that window as SX_EVT_MOUSE_RELATIVE deltas (x, y) instead of moves */
+typedef struct
+{
+    SxMsgHeader hdr;
+    uint32_t    grab;
+}
+SxReqGrabPointer;
+
 typedef struct
 {
     SxMsgHeader hdr;
@@ -114,6 +124,7 @@ enum
     SX_EVT_BUFFER_RELEASE,
     SX_EVT_THEME_CHANGED,
     SX_EVT_CLIPBOARD,
+    SX_EVT_MOUSE_RELATIVE,
 };
 
 typedef struct

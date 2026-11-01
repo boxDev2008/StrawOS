@@ -277,6 +277,8 @@ static void window_destroy(Window *w)
 
     if (S.hover_win == w)
         S.hover_win = NULL;
+    if (S.grab_win == w)
+        S.grab_win = NULL;
     if (S.hover_frame_win == w)
         S.hover_frame_win = NULL;
     if (S.drag_win == w)

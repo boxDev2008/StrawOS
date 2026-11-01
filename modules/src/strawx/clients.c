@@ -237,6 +237,14 @@ static void client_handle(Client *c, const SxMsgHeader *hdr)
                 clipboard_handle(c, hdr->type, (const SxReqClipboard *)hdr);
             break;
 
+        case SX_REQ_GRAB_POINTER:
+            if (w && hdr->size >= sizeof(SxReqGrabPointer))
+            {
+                w->pointer_grab = ((const SxReqGrabPointer *)hdr)->grab != 0;
+                pointer_grab_update();
+            }
+            break;
+
         case SX_REQ_RESIZE:
             if (w && hdr->size >= sizeof(SxReqRect) && !w->maximized)
             {

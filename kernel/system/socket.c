@@ -226,6 +226,20 @@ static ssize_t sock_write(VFile *file, const void *buf, size_t count)
     return (ssize_t)written;
 }
 
+static int sock_ioctl(VFile *file, uint64_t request, void *arg)
+{
+    Socket *s = sock_from_file(file);
+    if (!s)
+        return -EBADF;
+    if (request != SOCK_IOCTL_NONBLOCK || !arg)
+        return -EINVAL;
+    if (*(int *)arg)
+        s->flags |= SOCK_NONBLOCK;
+    else
+        s->flags &= ~SOCK_NONBLOCK;
+    return 0;
+}
+
 static int sock_close(VFile *file)
 {
     Socket *s = sock_from_file(file);
@@ -453,7 +467,7 @@ void socket_init(void)
 {
     socket_file_ops.read  = sock_read;
     socket_file_ops.write = sock_write;
-    socket_file_ops.ioctl = NULL;
+    socket_file_ops.ioctl = sock_ioctl;
     socket_file_ops.close = sock_close;
     socket_file_ops.poll  = sock_poll;
 }

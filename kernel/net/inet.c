@@ -765,6 +765,20 @@ static int inet_poll(VFile *file)
     return r;
 }
 
+static int inet_ioctl(VFile *file, uint64_t request, void *arg)
+{
+    InetSocket *s = inet_from_file(file);
+    if (!s)
+        return -EBADF;
+    if (request != SOCK_IOCTL_NONBLOCK || !arg)
+        return -EINVAL;
+    if (*(int *)arg)
+        s->flags |= SOCK_NONBLOCK;
+    else
+        s->flags &= ~SOCK_NONBLOCK;
+    return 0;
+}
+
 static int inet_close(VFile *file)
 {
     InetSocket *s = inet_from_file(file);
@@ -1013,5 +1027,6 @@ void inet_init(void)
     inet_file_ops.write = inet_write;
     inet_file_ops.close = inet_close;
     inet_file_ops.poll  = inet_poll;
+    inet_file_ops.ioctl = inet_ioctl;
     inet_seq_seed = (uint32_t)task_uptime_ms() * 2654435761u;
 }

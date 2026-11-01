@@ -30,6 +30,7 @@ typedef enum
     SX_EVENT_RESIZE,
     SX_EVENT_CLOSE,
     SX_EVENT_DISCONNECTED,
+    SX_EVENT_MOUSE_RELATIVE,
 }
 SxEventType;
 
@@ -92,6 +93,8 @@ void      sx_window_set_title(SxWindow *win, const char *title);
 void      sx_window_set_visible(SxWindow *win, bool visible);
 void      sx_window_move(SxWindow *win, int x, int y);
 void      sx_window_resize(SxWindow *win, int width, int height);
+/* hides the cursor and reports raw motion as SX_EVENT_MOUSE_RELATIVE while the window is focused */
+void      sx_window_grab_pointer(SxWindow *win, bool grab);
 
 int  sx_next_event(SxEvent *ev, int timeout_ms);
 bool sx_pending(void);

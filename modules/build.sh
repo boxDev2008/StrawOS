@@ -73,6 +73,8 @@ PIDS+=($!)
 PIDS+=($!)
 ./lite-xl.sh &
 PIDS+=($!)
+./classicube.sh &
+PIDS+=($!)
 
 compile lib/libc/crt0.c;   CRT0=$OUT
 compile lib/libc/libc.c;   LIBC=$OUT
@@ -121,6 +123,7 @@ link bin/fetch.elf   "${BASE[@]}" $FETCH $STRAWX $NETLIB obj/libbearssl.a
 link bin/netsurf.elf "${BASE[@]}" obj/libnetsurf.a $STRAWX $NETLIB obj/libbearssl.a
 link bin/discord.elf "${BASE[@]}" "${DISCORD[@]}" $STRAWX $NETLIB obj/libbearssl.a
 link bin/lite-xl.elf "${BASE[@]}" obj/liblitexl.a obj/libfreetype.a obj/libpcre2.a $LUA $STRAWX
+link bin/classicube.elf "${BASE[@]}" obj/libclassicube.a $STRAWX
 for entry in "${APPS[@]}"; do
     link bin/${entry%%:*}.elf "${BASE[@]}" ${entry#*:} $STRAWX
 done

@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=ClassiCube
+Comment=Build with blocks, alone or online
+Icon=/share/icons/classicube.png
+Exec=/bin/classicube.elf

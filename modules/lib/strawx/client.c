@@ -186,6 +186,7 @@ static void sx_handle_message(const SxEvtMsg *m)
         case SX_EVT_MOUSE_WHEEL: ev.type = SX_EVENT_MOUSE_WHEEL; break;
         case SX_EVT_MOUSE_ENTER: ev.type = SX_EVENT_MOUSE_ENTER; break;
         case SX_EVT_MOUSE_LEAVE: ev.type = SX_EVENT_MOUSE_LEAVE; break;
+        case SX_EVT_MOUSE_RELATIVE: ev.type = SX_EVENT_MOUSE_RELATIVE; break;
         case SX_EVT_KEY_DOWN:    ev.type = SX_EVENT_KEY_DOWN;    break;
         case SX_EVT_KEY_UP:      ev.type = SX_EVENT_KEY_UP;      break;
         case SX_EVT_FOCUS_IN:    ev.type = SX_EVENT_FOCUS_IN;  win->focused = true;  break;
@@ -480,6 +481,14 @@ void sx_window_set_visible(SxWindow *win, bool visible)
     memset(&req, 0, sizeof(req));
     req.visible = visible;
     sx_send(&req, SX_REQ_SET_VISIBLE, sizeof(req), win->id);
+}
+
+void sx_window_grab_pointer(SxWindow *win, bool grab)
+{
+    SxReqGrabPointer req;
+    memset(&req, 0, sizeof(req));
+    req.grab = grab;
+    sx_send(&req, SX_REQ_GRAB_POINTER, sizeof(req), win->id);
 }
 
 void sx_window_move(SxWindow *win, int x, int y)
