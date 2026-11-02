@@ -243,6 +243,8 @@ static void dispatch(const char *t, Json *d)
         vc_on_server_update(d);
     else if (strcmp(t, "GUILD_MEMBERS_CHUNK") == 0)
         store_on_members_chunk(d);
+    else if (strncmp(t, "STREAM_", 7) == 0)
+        vc_on_stream_event(t, d);
     else
         return;
     if (strcmp(t, "READY") == 0 || strcmp(t, "GUILD_CREATE") == 0 || strcmp(t, "VOICE_STATE_UPDATE") == 0)

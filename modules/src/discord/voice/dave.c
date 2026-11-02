@@ -502,14 +502,10 @@ static bool is_silence(const uint8_t *f, size_t len)
     return len == 3 && f[0] == 0xF8 && f[1] == 0xFF && f[2] == 0xFE;
 }
 
-bool dave_encrypt(Dave *d, const uint8_t *frame, size_t len, uint8_t *out, size_t *out_len)
+static bool encrypt_frame(Dave *d, const uint8_t *frame, size_t len, size_t clear, uint8_t *out, size_t *out_len)
 {
-    if (d->version == 0 || is_silence(frame, len))
-    {
-        memcpy(out, frame, len);
-        *out_len = len;
-        return true;
-    }
+    if (clear > len)
+        clear = len;
     if (!d->send.set)
         return false;
 
@@ -519,17 +515,45 @@ bool dave_encrypt(Dave *d, const uint8_t *frame, size_t len, uint8_t *out, size_
         return false;
     make_iv(nonce, iv);
     memcpy(out, frame, len);
-    mls_aes_gcm(true, key, 16, iv, 12, NULL, 0, out, len, tag);
+    mls_aes_gcm(true, key, 16, iv, 12, frame, clear, out + clear, len - clear, tag);
     size_t n = len;
     memcpy(out + n, tag, TAG_BYTES);
     n += TAG_BYTES;
-    size_t leb = leb_write(nonce, out + n);
-    n += leb;
-    out[n++] = (uint8_t)(TAG_BYTES + leb + 1 + 2);
+    size_t supp = n;
+    n += leb_write(nonce, out + n);
+    if (clear)
+    {
+        n += leb_write(0, out + n);
+        n += leb_write((uint32_t)clear, out + n);
+    }
+    out[n] = (uint8_t)(n - supp + TAG_BYTES + 1 + 2);
+    n++;
     out[n++] = MARKER;
     out[n++] = MARKER;
     *out_len = n;
     return true;
+}
+
+bool dave_encrypt_video(Dave *d, const uint8_t *frame, size_t len, size_t clear, uint8_t *out, size_t *out_len)
+{
+    if (d->version == 0)
+    {
+        memcpy(out, frame, len);
+        *out_len = len;
+        return true;
+    }
+    return encrypt_frame(d, frame, len, clear, out, out_len);
+}
+
+bool dave_encrypt(Dave *d, const uint8_t *frame, size_t len, uint8_t *out, size_t *out_len)
+{
+    if (d->version == 0 || is_silence(frame, len))
+    {
+        memcpy(out, frame, len);
+        *out_len = len;
+        return true;
+    }
+    return encrypt_frame(d, frame, len, 0, out, out_len);
 }
 
 typedef struct

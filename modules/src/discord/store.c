@@ -621,6 +621,7 @@ void store_on_voice_state(Json *vs, Snowflake guild_id)
     v->user_id = user;
     v->muted = json_bool(vs, "mute") || json_bool(vs, "self_mute");
     v->deafened = json_bool(vs, "deaf") || json_bool(vs, "self_deaf");
+    v->streaming = json_bool(vs, "self_stream");
     S.version++;
 }
 

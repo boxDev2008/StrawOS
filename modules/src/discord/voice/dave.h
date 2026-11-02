@@ -35,4 +35,5 @@ bool dave_ready(const Dave *d);
 uint64_t dave_epoch(const Dave *d);
 
 bool dave_encrypt(Dave *d, const uint8_t *frame, size_t len, uint8_t *out, size_t *out_len);
+bool dave_encrypt_video(Dave *d, const uint8_t *frame, size_t len, size_t clear, uint8_t *out, size_t *out_len);
 bool dave_decrypt(Dave *d, uint64_t sender, const uint8_t *frame, size_t len, uint8_t *out, size_t *out_len);

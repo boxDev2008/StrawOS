@@ -14,7 +14,7 @@
 #define SIDEBAR_W   240
 #define HEADER_H    48
 #define USER_H      52
-#define VOICE_H     58
+#define VOICE_H     98
 #define VOICE_ROW   28
 #define INPUT_H     44
 #define INPUT_GAP   24
@@ -49,6 +49,7 @@ typedef enum
     HIT_VC_MUTE,
     HIT_VC_DEAF,
     HIT_VC_LEAVE,
+    HIT_VC_STREAM,
 }
 HitKind;
 
@@ -818,6 +819,35 @@ static void draw_hangup(SxCanvas *c, int x, int y, uint32_t color)
     sx_draw_line(c, x + 17, y + 11, x + 16, y + 14, 3.0f, color);
 }
 
+static void draw_screen_share(SxCanvas *c, int x, int y, uint32_t color, bool live)
+{
+    sx_draw_line(c, x + 2, y + 3, x + 18, y + 3, 1.6f, color);
+    sx_draw_line(c, x + 2, y + 14, x + 18, y + 14, 1.6f, color);
+    sx_draw_line(c, x + 2, y + 3, x + 2, y + 14, 1.6f, color);
+    sx_draw_line(c, x + 18, y + 3, x + 18, y + 14, 1.6f, color);
+    sx_draw_line(c, x + 7, y + 18, x + 13, y + 18, 1.6f, color);
+    sx_draw_line(c, x + 10, y + 14, x + 10, y + 18, 1.6f, color);
+    if (live)
+    {
+        sx_draw_line(c, x + 7, y + 6, x + 13, y + 11, 1.6f, color);
+        sx_draw_line(c, x + 13, y + 6, x + 7, y + 11, 1.6f, color);
+    }
+    else
+    {
+        sx_draw_line(c, x + 10, y + 11, x + 10, y + 6, 1.6f, color);
+        sx_draw_line(c, x + 10, y + 6, x + 7, y + 9, 1.6f, color);
+        sx_draw_line(c, x + 10, y + 6, x + 13, y + 9, 1.6f, color);
+    }
+}
+
+static int draw_live_badge(SxCanvas *c, int right, int y)
+{
+    int w = font_width(FACE_BOLD, 10, "LIVE", 4) + 8;
+    sx_fill_rounded_rect(c, right - w, y + 6, w, 15, 4, COL_RED);
+    font_draw(c, FACE_BOLD, 10, right - w + 4, y + 17, "LIVE", 4, SX_RGB(0xFF, 0xFF, 0xFF));
+    return w + 4;
+}
+
 static void draw_phone(SxCanvas *c, int x, int y, uint32_t color)
 {
     sx_draw_line(c, x + 5, y + 3, x + 3, y + 7, 2.4f, color);
@@ -853,6 +883,8 @@ static int draw_voice_members(SxCanvas *c, Channel *ch, int x, int y, int w)
             sx_draw_circle(c, x + 12, y + 14, 12.5f, 2.0f, COL_GREEN);
         draw_avatar(c, v->user_id, u ? u->avatar : NULL, u ? u->discriminator : NULL, x + 2, y + 4, 20);
         int right = x + w;
+        if (v->streaming)
+            right -= draw_live_badge(c, right, y);
         if (v->deafened)
         {
             right -= 20;
@@ -875,13 +907,14 @@ static void draw_voice_panel(SxCanvas *c, int x0, int vy)
     sx_fill_rect(c, x0, vy, SIDEBAR_W, VOICE_H, COL_PANEL);
     sx_fill_rect(c, x0, vy + VOICE_H - 1, SIDEBAR_W, 1, COL_DIVIDER);
     VcState st = vc_state();
+    StreamState ss = vc_stream_state();
     const char *status;
     uint32_t color;
     switch (st)
     {
         case VC_CONNECTED:
-            status = "Voice Connected";
-            color = COL_GREEN;
+            status = ss == SS_LIVE ? "Screen Live" : ss == SS_STARTING ? "Starting Stream..." : "Voice Connected";
+            color = ss == SS_LIVE ? COL_RED : ss == SS_STARTING ? SX_RGB(0xF0, 0xB2, 0x32) : COL_GREEN;
             break;
         case VC_FAILED:
             status = "Voice Disconnected";
@@ -898,6 +931,16 @@ static void draw_voice_panel(SxCanvas *c, int x0, int vy)
     Channel *ch = store_channel(vc_channel());
     if (st == VC_FAILED && vc_error()[0])
         snprintf(sub, sizeof(sub), "%s", vc_error());
+    else if (st == VC_CONNECTED && ss == SS_OFF && vc_stream_error()[0])
+        snprintf(sub, sizeof(sub), "%s", vc_stream_error());
+    else if (ss == SS_LIVE)
+    {
+        int n = vc_stream_viewers();
+        if (n == 0)
+            snprintf(sub, sizeof(sub), "No one is watching yet");
+        else
+            snprintf(sub, sizeof(sub), "%d watching", n);
+    }
     else if (ch)
     {
         char name[128];
@@ -909,6 +952,21 @@ static void draw_voice_panel(SxCanvas *c, int x0, int vy)
     else
         sub[0] = '\0';
     font_draw_ellipsis(c, FACE_REGULAR, 12, x0 + 12, vy + 41, sub, SIDEBAR_W - 110, COL_MUTED);
+
+    SxRect share = sx_rect(x0 + 10, vy + 56, SIDEBAR_W - 20, 32);
+    bool can_share = st == VC_CONNECTED;
+    uint32_t share_bg = ss != SS_OFF ? COL_RED : COL_HOVER;
+    if (can_share && hovering(share))
+        share_bg = ss != SS_OFF ? SX_RGB(0xC0, 0x36, 0x3A) : COL_DIVIDER;
+    sx_fill_rounded_rect(c, share.x, share.y, share.w, share.h, 6, share_bg);
+    const char *label = ss == SS_OFF ? "Share Screen" : ss == SS_STARTING ? "Cancel" : "Stop Streaming";
+    uint32_t fg = !can_share ? COL_FAINT : ss != SS_OFF ? SX_RGB(0xFF, 0xFF, 0xFF) : COL_TEXT;
+    int lw = font_width(FACE_BOLD, 13, label, (int)strlen(label));
+    int lx = share.x + (share.w - lw - 26) / 2;
+    draw_screen_share(c, lx, share.y + 6, fg, ss != SS_OFF);
+    font_draw(c, FACE_BOLD, 13, lx + 26, share.y + 21, label, (int)strlen(label), fg);
+    if (can_share)
+        add_hit(HIT_VC_STREAM, share, 0);
 
     int bx = x0 + SIDEBAR_W - 100;
     struct { HitKind kind; int which; } buttons[3] = { { HIT_VC_MUTE, 0 }, { HIT_VC_DEAF, 1 }, { HIT_VC_LEAVE, 2 } };
@@ -1696,6 +1754,12 @@ static void on_click(int x, int y)
             break;
         case HIT_VC_DEAF:
             vc_set_deaf(!vc_deafened());
+            break;
+        case HIT_VC_STREAM:
+            if (vc_stream_state() == SS_OFF)
+                vc_stream_start();
+            else
+                vc_stream_stop();
             break;
         case HIT_VC_LEAVE:
             vc_leave();

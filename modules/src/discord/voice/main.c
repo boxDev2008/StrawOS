@@ -10,6 +10,7 @@
 #include "../discord.h"
 #include "dave.h"
 #include "mls.h"
+#include "screen.h"
 
 #define FRAME_SAMPLES   960
 #define FRAME_BYTES     (FRAME_SAMPLES * AUDIO_FRAME)
@@ -23,6 +24,23 @@
 #define DISCOVERY_MS    1000
 #define CONNECT_MS      10000
 #define MODE            "aead_aes256_gcm_rtpsize"
+
+#define VIDEO_PT        105
+#define VIDEO_RTX_PT    106
+#define VIDEO_MAX_W     1920
+#define VIDEO_MAX_H     1080
+#define VIDEO_FPS       15
+#define VIDEO_BITRATE   2500000
+#define VIDEO_CHUNK     1100
+#define VIDEO_QUEUE     768
+#define VIDEO_MAX_FRAME (VIDEO_QUEUE * VIDEO_CHUNK)
+#define KEY_MIN_MS      1000
+#define KEY_EVERY_MS    20000
+#define IDLE_FRAME_MS   1000
+#define SR_EVERY_MS     1000
+#define Q_START         30
+#define Q_MIN           12
+#define Q_MAX           100
 
 typedef struct
 {
@@ -86,6 +104,33 @@ static struct
 
     Speaker  speakers[MAX_SPEAKERS];
     int      n_speakers;
+
+    bool     stream;
+    bool     video_on;
+    uint32_t video_ssrc;
+    uint32_t rtx_ssrc;
+    Screen  *screen;
+    uint16_t vseq;
+    uint32_t vts_base;
+    uint32_t vts;
+    uint16_t picture_id;
+    uint64_t next_frame;
+    uint64_t last_frame;
+    uint64_t last_key;
+    bool     want_key;
+    int      q;
+    int64_t  credit;
+    uint64_t credit_at;
+    int64_t  pace;
+    uint64_t pace_at;
+    uint8_t *queue;
+    uint16_t qlen[VIDEO_QUEUE];
+    int      q_head, q_count;
+    uint32_t v_packets;
+    uint32_t v_octets;
+    uint64_t next_sr;
+    uint8_t *frame_buf;
+    uint8_t *dave_buf;
 }
 V;
 
@@ -171,6 +216,8 @@ static void send_identify(void)
         buf_json_string(&b, V.session);
         buf_puts(&b, ",\"token\":");
         buf_json_string(&b, V.token);
+        if (V.stream)
+            buf_puts(&b, ",\"video\":true,\"streams\":[{\"type\":\"screen\",\"rid\":\"100\",\"quality\":100}]");
         buf_printf(&b, ",\"max_dave_protocol_version\":%d}}", DAVE_MAX_PROTOCOL);
     }
     ws_send(V.ws, b.data, b.len);
@@ -238,6 +285,251 @@ static void send_rtp(const uint8_t *frame, size_t len)
     memcpy(pkt + 12 + enc_len, tag, 16);
     put32(pkt + 12 + enc_len + 16, nonce);
     write(V.udp, pkt, 12 + enc_len + 20);
+}
+
+static void request_key(void)
+{
+    V.want_key = true;
+}
+
+static void handle_rtcp(uint8_t *p, size_t n)
+{
+    if (n < 8 + 20)
+        return;
+    size_t ct_len = n - 8 - 20;
+    uint8_t iv[12] = { 0 };
+    memcpy(iv, p + n - 4, 4);
+    if (!mls_aes_gcm_check(V.key, 32, iv, 12, p, 8, p + 8, ct_len, p + 8 + ct_len, 16))
+        return;
+    size_t end = 8 + ct_len, off = 0;
+    while (off + 4 <= end)
+    {
+        int fmt = p[off] & 0x1F, pt = p[off + 1];
+        size_t len = ((size_t)(p[off + 2] << 8 | p[off + 3]) + 1) * 4;
+        if ((p[off] >> 6) != 2 || off + len > end)
+            break;
+        if (pt == 206 && (fmt == 1 || fmt == 4))
+            request_key();
+        off += len;
+    }
+}
+
+static void put16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v >> 8);
+    p[1] = (uint8_t)v;
+}
+
+static void queue_video_packet(const uint8_t *chunk, size_t len, bool first, bool last)
+{
+    if (V.q_count == VIDEO_QUEUE)
+        return;
+    uint8_t *pkt = V.queue + (size_t)((V.q_head + V.q_count) % VIDEO_QUEUE) * MAX_PACKET;
+    pkt[0] = 0x90;
+    pkt[1] = (uint8_t)(VIDEO_PT | (last ? 0x80 : 0));
+    put16(pkt + 2, V.vseq++);
+    put32(pkt + 4, V.vts);
+    put32(pkt + 8, V.video_ssrc);
+    pkt[12] = 0xBE;
+    pkt[13] = 0xDE;
+    pkt[14] = 0;
+    pkt[15] = 1;
+
+    uint8_t *body = pkt + 16;
+    body[0] = 0x51;
+    body[1] = body[2] = body[3] = 0;
+    body[4] = (uint8_t)(0x80 | (first ? 0x10 : 0));
+    body[5] = 0x80;
+    body[6] = (uint8_t)(0x80 | ((V.picture_id >> 8) & 0x7F));
+    body[7] = (uint8_t)V.picture_id;
+    memcpy(body + 8, chunk, len);
+    size_t body_len = 8 + len;
+
+    uint32_t nonce = V.tx_nonce++;
+    uint8_t iv[12] = { 0 }, tag[16];
+    put32(iv, nonce);
+    mls_aes_gcm(true, V.key, 32, iv, 12, pkt, 16, body, body_len, tag);
+    memcpy(body + body_len, tag, 16);
+    put32(body + body_len + 16, nonce);
+    V.qlen[(V.q_head + V.q_count) % VIDEO_QUEUE] = (uint16_t)(16 + body_len + 20);
+    V.q_count++;
+    V.v_packets++;
+    V.v_octets += (uint32_t)(8 + len);
+}
+
+static bool send_video_frame(const uint8_t *frame, size_t len, bool key)
+{
+    size_t enc_len;
+    if (!dave_encrypt_video(V.dave, frame, len, key ? 10 : 1, V.dave_buf, &enc_len))
+        return false;
+    size_t chunks = (enc_len + VIDEO_CHUNK - 1) / VIDEO_CHUNK;
+    if (chunks > (size_t)(VIDEO_QUEUE - V.q_count))
+        return false;
+    V.vts = V.vts_base + (uint32_t)(uptime_ms() * 90);
+    for (size_t i = 0, off = 0; i < chunks; i++)
+    {
+        size_t n = enc_len - off < VIDEO_CHUNK ? enc_len - off : VIDEO_CHUNK;
+        queue_video_packet(V.dave_buf + off, n, i == 0, i + 1 == chunks);
+        off += n;
+    }
+    V.picture_id = (uint16_t)((V.picture_id + 1) & 0x7FFF);
+    return true;
+}
+
+static void send_sender_report(void)
+{
+    uint8_t pkt[8 + 20 + 20];
+    pkt[0] = 0x80;
+    pkt[1] = 200;
+    put16(pkt + 2, 6);
+    put32(pkt + 4, V.video_ssrc);
+    uint64_t now = uptime_ms();
+    put32(pkt + 8, (uint32_t)(now / 1000));
+    put32(pkt + 12, (uint32_t)(((now % 1000) << 32) / 1000));
+    put32(pkt + 16, V.vts_base + (uint32_t)(now * 90));
+    put32(pkt + 20, V.v_packets);
+    put32(pkt + 24, V.v_octets);
+    uint32_t nonce = V.tx_nonce++;
+    uint8_t iv[12] = { 0 }, tag[16];
+    put32(iv, nonce);
+    mls_aes_gcm(true, V.key, 32, iv, 12, pkt, 8, pkt + 8, 20, tag);
+    memcpy(pkt + 28, tag, 16);
+    put32(pkt + 44, nonce);
+    write(V.udp, pkt, sizeof(pkt));
+}
+
+static void pace_pump(void)
+{
+    uint64_t now = uptime_ms();
+    int64_t rate = VIDEO_BITRATE * 3 / 8 / 1000;
+    V.pace += (int64_t)(now - V.pace_at) * rate;
+    if (V.pace > rate * 20)
+        V.pace = rate * 20;
+    V.pace_at = now;
+    while (V.q_count > 0 && V.pace > 0)
+    {
+        size_t len = V.qlen[V.q_head];
+        write(V.udp, V.queue + (size_t)V.q_head * MAX_PACKET, len);
+        V.pace -= (int64_t)len;
+        V.q_head = (V.q_head + 1) % VIDEO_QUEUE;
+        V.q_count--;
+    }
+}
+
+static void adjust_quality(size_t bytes, bool key)
+{
+    size_t target = VIDEO_BITRATE / 8 / VIDEO_FPS;
+    if (key)
+        target *= 6;
+    if (bytes > target * 2)
+        V.q += bytes > target * 4 ? 8 : 3;
+    else if (bytes < target / 3)
+        V.q--;
+    if (V.q < Q_MIN)
+        V.q = Q_MIN;
+    if (V.q > Q_MAX)
+        V.q = Q_MAX;
+}
+
+static void video_pump(void)
+{
+    if (!V.video_on || V.udp < 0)
+        return;
+    uint64_t now = uptime_ms();
+    if (V.q_count > 0)
+        pace_pump();
+
+    int64_t rate = VIDEO_BITRATE / 8 / 1000;
+    V.credit += (int64_t)(now - V.credit_at) * rate;
+    if (V.credit > rate * 1000)
+        V.credit = rate * 1000;
+    V.credit_at = now;
+
+    if (now >= V.next_sr)
+    {
+        send_sender_report();
+        V.next_sr = now + SR_EVERY_MS;
+    }
+    if (now < V.next_frame || V.q_count > 0)
+        return;
+    V.next_frame = now + 1000 / VIDEO_FPS;
+
+    bool key = (V.want_key && now - V.last_key >= KEY_MIN_MS) || !V.last_key || now - V.last_key >= KEY_EVERY_MS;
+    if (V.credit < 0 && !key)
+        return;
+    int grabbed = screen_grab(V.screen);
+    if (grabbed < 0)
+        return;
+    if (grabbed == 0 && !key && now - V.last_frame < IDLE_FRAME_MS)
+        return;
+
+    size_t len = screen_encode(V.screen, key, V.q, V.frame_buf, VIDEO_MAX_FRAME);
+    if (len == 0)
+    {
+        V.q = V.q + 10 > Q_MAX ? Q_MAX : V.q + 10;
+        request_key();
+        return;
+    }
+    if (!send_video_frame(V.frame_buf, len, key))
+    {
+        request_key();
+        return;
+    }
+    V.credit -= (int64_t)len;
+    V.last_frame = now;
+    if (key)
+    {
+        V.last_key = now;
+        V.want_key = false;
+    }
+    adjust_quality(len, key);
+    pace_pump();
+}
+
+static void start_video(void)
+{
+    if (V.video_on)
+        return;
+    if (!V.screen)
+    {
+        V.screen = screen_open(VIDEO_MAX_W, VIDEO_MAX_H);
+        if (!V.screen)
+            quit("Could not capture the screen.");
+    }
+    if (!V.queue)
+        V.queue = malloc((size_t)VIDEO_QUEUE * MAX_PACKET);
+    if (!V.frame_buf)
+        V.frame_buf = malloc(VIDEO_MAX_FRAME);
+    if (!V.dave_buf)
+        V.dave_buf = malloc(VIDEO_MAX_FRAME + 64);
+    if (!V.queue || !V.frame_buf || !V.dave_buf)
+        quit("Out of memory for screen sharing.");
+
+    char json[512];
+    int w = screen_width(V.screen), h = screen_height(V.screen);
+    snprintf(json, sizeof(json),
+             "{\"op\":12,\"d\":{\"audio_ssrc\":%u,\"video_ssrc\":%u,\"rtx_ssrc\":%u,\"streams\":[{\"type\":\"video\","
+             "\"rid\":\"100\",\"ssrc\":%u,\"active\":true,\"quality\":100,\"rtx_ssrc\":%u,\"max_bitrate\":%d,"
+             "\"max_framerate\":%d,\"max_resolution\":{\"type\":\"fixed\",\"width\":%d,\"height\":%d}}]}}",
+             V.ssrc, V.video_ssrc, V.rtx_ssrc, V.video_ssrc, V.rtx_ssrc, VIDEO_BITRATE, VIDEO_FPS, w, h);
+    send_json(json);
+    send_speaking(true);
+
+    random_bytes(&V.vseq, sizeof(V.vseq));
+    random_bytes(&V.vts_base, sizeof(V.vts_base));
+    random_bytes(&V.picture_id, sizeof(V.picture_id));
+    V.picture_id &= 0x7FFF;
+    uint64_t now = uptime_ms();
+    V.q = Q_START;
+    V.credit = 0;
+    V.credit_at = V.pace_at = now;
+    V.pace = 0;
+    V.next_frame = now;
+    V.next_sr = now + SR_EVERY_MS;
+    V.last_key = 0;
+    V.want_key = true;
+    V.video_on = true;
+    ctl_send("video %dx%d", w, h);
 }
 
 static Speaker *speaker_for_ssrc(uint32_t ssrc)
@@ -363,7 +655,13 @@ static void handle_udp_packet(uint8_t *p, size_t n)
             int port = p[72] << 8 | p[73];
             V.discovered = true;
             Buf b = { 0 };
-            buf_puts(&b, "{\"op\":1,\"d\":{\"protocol\":\"udp\",\"data\":{\"address\":");
+            buf_puts(&b, "{\"op\":1,\"d\":{\"protocol\":\"udp\",");
+            if (V.stream)
+                buf_printf(&b, "\"codecs\":[{\"name\":\"opus\",\"type\":\"audio\",\"priority\":1000,\"payload_type\":120},"
+                               "{\"name\":\"VP8\",\"type\":\"video\",\"priority\":1000,\"payload_type\":%d,"
+                               "\"rtx_payload_type\":%d,\"encode\":true,\"decode\":true}],",
+                           VIDEO_PT, VIDEO_RTX_PT);
+            buf_puts(&b, "\"data\":{\"address\":");
             buf_json_string(&b, ip);
             buf_printf(&b, ",\"port\":%d,\"mode\":\"%s\"}}}", port, MODE);
             send_json(b.data);
@@ -372,6 +670,13 @@ static void handle_udp_packet(uint8_t *p, size_t n)
         return;
     }
     if (!V.have_key || n < 12 + 20 || (p[0] >> 6) != 2)
+        return;
+    if (p[1] >= 200 && p[1] <= 206)
+    {
+        handle_rtcp(p, n);
+        return;
+    }
+    if (V.stream)
         return;
     uint8_t pt = p[1] & 0x7F;
     if (pt != 0x78)
@@ -438,6 +743,14 @@ static void send_discovery(void)
 static void on_ready(Json *d)
 {
     V.ssrc = (uint32_t)json_int(d, "ssrc", 0);
+    V.video_ssrc = V.ssrc + 1;
+    V.rtx_ssrc = V.ssrc + 2;
+    Json *streams = json_get(d, "streams");
+    if (streams && streams->child)
+    {
+        V.video_ssrc = (uint32_t)json_int(streams->child, "ssrc", V.video_ssrc);
+        V.rtx_ssrc = (uint32_t)json_int(streams->child, "rtx_ssrc", V.rtx_ssrc);
+    }
     snprintf(V.ip, sizeof(V.ip), "%s", json_str(d, "ip") ? json_str(d, "ip") : "");
     V.port = (int)json_int(d, "port", 0);
     bool mode_ok = false;
@@ -462,7 +775,7 @@ static void on_ready(Json *d)
 
 static void open_mic(void)
 {
-    if (V.mic >= 0 || V.muted || V.deafened || !V.have_key)
+    if (V.stream || V.mic >= 0 || V.muted || V.deafened || !V.have_key)
         return;
     V.mic = open(AUDIO_DEVICE, O_RDONLY);
 }
@@ -495,6 +808,13 @@ static void on_session(Json *d)
     random_bytes(&V.rtp_ts, sizeof(V.rtp_ts));
     dave_select_protocol(V.dave, (int)json_int(d, "dave_protocol_version", 0));
     ctl_send("state connected");
+    if (V.stream)
+    {
+        const char *codec = json_str(d, "video_codec");
+        if (codec && strcmp(codec, "VP8") != 0)
+            printf("discord-voice: server picked video codec %s\n", codec);
+        start_video();
+    }
     open_mic();
 }
 
@@ -550,6 +870,7 @@ static void handle_json(const char *text, size_t len)
                 n++;
             }
             dave_clients_connect(V.dave, list, n);
+            request_key();
             break;
         }
         case 13:
@@ -807,6 +1128,7 @@ static void tick(void)
     {
         V.shown_epoch = epoch;
         ctl_send("e2ee %llu", (unsigned long long)epoch);
+        request_key();
     }
 }
 
@@ -840,6 +1162,8 @@ int main(int argc, char **argv)
             V.muted = atoi(v) != 0;
         else if (!strcmp(k, "--deaf"))
             V.deafened = atoi(v) != 0;
+        else if (!strcmp(k, "--stream"))
+            V.stream = atoi(v) != 0;
     }
     if (!V.endpoint[0] || !V.server[0] || !V.session[0] || !V.token[0] || !V.user_id || !ctl_name)
         usage();
@@ -871,7 +1195,7 @@ int main(int argc, char **argv)
 
     for (;;)
     {
-        struct pollfd fds[4];
+        struct pollfd fds[5];
         int n = 0;
         fds[n++] = (struct pollfd){ V.ctl, POLLIN, 0 };
         n += ws_pollfd(V.ws, &fds[n]);
@@ -880,6 +1204,15 @@ int main(int argc, char **argv)
         if (V.mic >= 0)
             fds[n++] = (struct pollfd){ V.mic, POLLIN, 0 };
         int64_t timeout = ws_has_buffered(V.ws) ? 0 : 20;
+        if (V.video_on)
+        {
+            uint64_t now = uptime_ms();
+            int64_t until = V.next_frame > now ? (int64_t)(V.next_frame - now) : 0;
+            if (V.q_count > 0)
+                until = 1;
+            if (until < timeout)
+                timeout = until;
+        }
         poll(fds, (uint64_t)n, timeout);
 
         if (fds[0].revents & (POLLIN | POLLHUP))
@@ -887,6 +1220,7 @@ int main(int argc, char **argv)
         ws_pump();
         udp_pump();
         mic_pump();
+        video_pump();
         tick();
     }
 }

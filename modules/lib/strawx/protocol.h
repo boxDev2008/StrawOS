@@ -35,6 +35,7 @@ enum
     SX_REQ_CLIPBOARD_SET,
     SX_REQ_CLIPBOARD_GET,
     SX_REQ_GRAB_POINTER,
+    SX_REQ_CAPTURE_SCREEN,
 };
 
 typedef struct
@@ -105,6 +106,18 @@ typedef struct
 }
 SxReqClipboard;
 
+/* copies the composed screen as 0x00RRGGBB rows of width pixels into data when length is large
+   enough; SX_EVT_CAPTURE reports the screen size either way */
+typedef struct
+{
+    SxMsgHeader hdr;
+    uint32_t    serial;
+    uint32_t    reserved;
+    uint64_t    data;
+    uint64_t    length;
+}
+SxReqCapture;
+
 enum
 {
     SX_EVT_WELCOME = 100,
@@ -125,6 +138,7 @@ enum
     SX_EVT_THEME_CHANGED,
     SX_EVT_CLIPBOARD,
     SX_EVT_MOUSE_RELATIVE,
+    SX_EVT_CAPTURE,
 };
 
 typedef struct

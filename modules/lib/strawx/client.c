@@ -16,6 +16,10 @@ static struct
     uint32_t  clipboard_serial;
     uint64_t  clipboard_len;
 
+    uint32_t  capture_serial;
+    int       capture_w, capture_h;
+    uint64_t  capture_len;
+
     uint8_t   rx[SX_RX_MAX];
     size_t    rx_len;
 
@@ -132,6 +136,13 @@ static void sx_handle_message(const SxEvtMsg *m)
         case SX_EVT_CLIPBOARD:
             sx_conn.clipboard_len = m->length;
             sx_conn.clipboard_serial = m->serial;
+            return;
+
+        case SX_EVT_CAPTURE:
+            sx_conn.capture_w = m->w;
+            sx_conn.capture_h = m->h;
+            sx_conn.capture_len = m->length;
+            sx_conn.capture_serial = m->serial;
             return;
 
         case SX_EVT_THEME_CHANGED:
@@ -531,6 +542,31 @@ static bool sx_clipboard_request(uint16_t type, void *data, size_t length, size_
     if (total)
         *total = (size_t)sx_conn.clipboard_len;
     return true;
+}
+
+bool sx_screen_capture(uint32_t *pixels, size_t capacity, int *width, int *height)
+{
+    if (!sx_conn.connected && sx_connect() != 0)
+        return false;
+
+    SxReqCapture req;
+    memset(&req, 0, sizeof(req));
+    req.serial = ++sx_conn.next_serial;
+    req.data = (uint64_t)pixels;
+    req.length = pixels ? capacity * 4 : 0;
+
+    sx_conn.capture_serial = 0;
+    if (!sx_send(&req, SX_REQ_CAPTURE_SCREEN, sizeof(req), 0))
+        return false;
+    while (sx_conn.capture_serial != req.serial)
+        if (sx_pump(-1) < 0)
+            return false;
+
+    if (width)
+        *width = sx_conn.capture_w;
+    if (height)
+        *height = sx_conn.capture_h;
+    return sx_conn.capture_len != 0;
 }
 
 bool sx_clipboard_set(const char *text, size_t length)

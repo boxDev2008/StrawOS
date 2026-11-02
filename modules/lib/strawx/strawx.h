@@ -102,4 +102,6 @@ bool sx_pending(void);
 bool  sx_clipboard_set(const char *text, size_t length);
 char *sx_clipboard_get(size_t *length);
 
+bool  sx_screen_capture(uint32_t *pixels, size_t capacity, int *width, int *height);
+
 uint64_t sx_time_ms(void);

@@ -314,6 +314,7 @@ typedef struct
     Snowflake user_id;
     bool      muted;
     bool      deafened;
+    bool      streaming;
 }
 VoiceState;
 
@@ -415,6 +416,14 @@ typedef enum
 }
 VcState;
 
+typedef enum
+{
+    SS_OFF,
+    SS_STARTING,
+    SS_LIVE,
+}
+StreamState;
+
 void        vc_join(Channel *ch);
 void        vc_leave(void);
 void        vc_set_mute(bool muted);
@@ -432,6 +441,12 @@ bool        vc_encrypted(void);
 bool        vc_speaking(Snowflake user);
 const char *vc_error(void);
 bool        vc_take_changed(void);
+void        vc_stream_start(void);
+void        vc_stream_stop(void);
+void        vc_on_stream_event(const char *t, Json *d);
+StreamState vc_stream_state(void);
+int         vc_stream_viewers(void);
+const char *vc_stream_error(void);
 
 extern char api_base[256];
 extern char gateway_url[256];

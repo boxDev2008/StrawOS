@@ -99,6 +99,23 @@ static void clipboard_handle(Client *c, uint16_t type, const SxReqClipboard *req
     send_raw(c, &ev, sizeof(ev));
 }
 
+static void capture_handle(Client *c, const SxReqCapture *req)
+{
+    size_t bytes = (size_t)S.width * (size_t)S.height * 4;
+    if (req->data && req->length >= bytes)
+        memcpy((void *)req->data, S.back, bytes);
+
+    SxEvtMsg ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.hdr.type = SX_EVT_CAPTURE;
+    ev.hdr.size = sizeof(ev);
+    ev.serial = req->serial;
+    ev.w = S.width;
+    ev.h = S.height;
+    ev.length = req->data && req->length >= bytes ? bytes : 0;
+    send_raw(c, &ev, sizeof(ev));
+}
+
 static void client_handle(Client *c, const SxMsgHeader *hdr)
 {
     Window *w = hdr->window ? window_by_id(c, hdr->window) : NULL;
@@ -235,6 +252,11 @@ static void client_handle(Client *c, const SxMsgHeader *hdr)
         case SX_REQ_CLIPBOARD_GET:
             if (hdr->size >= sizeof(SxReqClipboard))
                 clipboard_handle(c, hdr->type, (const SxReqClipboard *)hdr);
+            break;
+
+        case SX_REQ_CAPTURE_SCREEN:
+            if (hdr->size >= sizeof(SxReqCapture))
+                capture_handle(c, (const SxReqCapture *)hdr);
             break;
 
         case SX_REQ_GRAB_POINTER:

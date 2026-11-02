@@ -26,7 +26,7 @@
 - **NetSurf**: web browser, ported to StrawX
 - **TinyCC**: compile C programs
 - **Lite XL**: code editor with split panes and drag-and-drop tabs, ported to StrawX and Lua 5.5
-- **Discord**: an experimental client, with voice chat in servers and DM calls (Opus, end-to-end encrypted with DAVE)
+- **Discord**: an experimental client, with voice chat and screen sharing in servers and DM calls (Opus and a built-in VP8 encoder, end-to-end encrypted with DAVE)
 - **ClassiCube**: Minecraft Classic client with singleplayer and multiplayer, ported to StrawX (software renderer)
 - `fetch`: a command-line HTTP(S) downloader
 - `audio`: play tones and WAV files, record from the microphone, set the volume
