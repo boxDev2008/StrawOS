@@ -6,6 +6,7 @@ static void scheduler_timer_irq(void)
         nic_poll();
         net_loopback_poll();
         inet_tick();
+        hda_poll();
     }
     task_scheduler_tick();
 }
@@ -84,6 +85,7 @@ void kmain(void)
     mouse_init();
     xhci_init();
     ps2_mouse_init();
+    hda_init();
     task_init();
 
     task_create("net", net_task, NULL);

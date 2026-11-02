@@ -135,6 +135,8 @@ _Static_assert(TASK_NAME_MAX == DEVFS_TASK_NAME_MAX, "TaskInfo name must match T
 _Static_assert(sizeof(TaskInfo) == 96, "TaskInfo layout is shared with libc");
 _Static_assert(sizeof(NetInfo) == 17, "NetInfo layout is shared with libc");
 _Static_assert(sizeof(RtcTime) == 8, "RtcTime layout is shared with libc");
+_Static_assert(sizeof(AudioInfo) == 24, "AudioInfo layout is shared with libc");
+_Static_assert(sizeof(AudioState) == 16, "AudioState layout is shared with libc");
 
 static ssize_t devfs_record_read(VFile *file, const void *data, size_t size, void *buf, size_t count)
 {
@@ -260,6 +262,18 @@ static VNode *devfs_add_child(VNode *dir, const char *name, VFileOps *file_ops, 
     return n;
 }
 
+static VNode *devfs_root_node;
+
+VNode *devfs_register(const char *name, VFileOps *file_ops, void *private_data)
+{
+    if (!devfs_root_node)
+        return NULL;
+    VNode *n = devfs_add_child(devfs_root_node, name, file_ops, private_data);
+    if (n)
+        kprintf("devfs: /dev/%s registered\n", name);
+    return n;
+}
+
 VNode *devfs_create_root(void)
 {
     devfs_dir_ops.lookup  = devfs_lookup;
@@ -372,5 +386,6 @@ VNode *devfs_create_root(void)
         devfs_add_child(root, "net", &devfs_net_file_ops, NULL);
     }
 
+    devfs_root_node = root;
     return root;
 }

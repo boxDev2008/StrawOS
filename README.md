@@ -15,7 +15,7 @@
 - SMP, with a preemptive scheduler driven by the local APIC timer
 - Physical and virtual memory management, kernel heap, ELF loader for userspace programs
 - VFS with a RAM filesystem (populated from a tar archive at boot) and a device filesystem
-- Drivers: PCI, xHCI with USB HID keyboard and mouse, PS/2 mouse, RTC, RTL8139 and RTL8169 network cards
+- Drivers: PCI, xHCI with USB HID keyboard and mouse, PS/2 mouse, RTC, RTL8139 and RTL8169 network cards, Intel HD Audio (playback and microphone capture, mixed in the kernel, exposed as `/dev/audio`)
 - TCP/IP networking with DHCP, DNS and a socket API
 
 **Userspace**
@@ -29,6 +29,7 @@
 - **Discord**: an experimental client
 - **ClassiCube**: Minecraft Classic client with singleplayer and multiplayer, ported to StrawX (software renderer)
 - `fetch`: a command-line HTTP(S) downloader
+- `audio`: play tones and WAV files, record from the microphone, set the volume
 
 ## Building
 

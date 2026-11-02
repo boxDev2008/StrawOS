@@ -61,4 +61,34 @@ typedef struct
 }
 NetInfo;
 
+#define DEVFS_IOCTL_AUDIO_GET_INFO   0x1100
+#define DEVFS_IOCTL_AUDIO_GET_STATE  0x1101
+#define DEVFS_IOCTL_AUDIO_SET_VOLUME 0x1102
+#define DEVFS_IOCTL_AUDIO_GET_VOLUME 0x1103
+#define DEVFS_IOCTL_AUDIO_DROP       0x1104
+
+typedef struct
+{
+    uint32_t sample_rate;
+    uint16_t channels;
+    uint16_t bits;
+    uint8_t  playback;
+    uint8_t  capture;
+    uint8_t  reserved[2];
+    uint32_t period_bytes;
+    uint32_t queue_bytes;
+    uint32_t latency_bytes;
+}
+AudioInfo;
+
+typedef struct
+{
+    uint32_t play_queued;
+    uint32_t play_free;
+    uint32_t capture_avail;
+    uint32_t reserved;
+}
+AudioState;
+
 VNode *devfs_create_root(void);
+VNode *devfs_register(const char *name, VFileOps *file_ops, void *private_data);

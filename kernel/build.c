@@ -131,6 +131,9 @@ static struct limine_framebuffer *limine_framebuffer;
 #include "drivers/nic.h"
 #include "drivers/nic.c"
 
+#include "drivers/hda.h"
+#include "drivers/hda.c"
+
 #include "net/net.c"
 #include "net/inet.c"
 

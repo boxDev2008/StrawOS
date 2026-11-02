@@ -98,6 +98,7 @@ if stale $TG/tccrun.c lib/tinycc/tccrun.c lib/tinycc/tcc.c lib/tinycc/libtcc.c b
 fi
 compile $TG/tcc.c -DONE_SOURCE=1 -Ilib/tinycc-port -Ilib/tinycc -w; TCC=$OUT
 compile src/fetch.c "${NET[@]}"; FETCH=$OUT
+compile src/audio.c;       AUDIO=$OUT
 
 DISCORD=()
 for src in src/discord/*.c; do
@@ -119,6 +120,7 @@ link bin/init.elf    "${BASE[@]}" $INIT
 link bin/lsh.elf     "${BASE[@]}" $LSH $LUA
 link bin/strawx.elf  "${BASE[@]}" $SXMAIN $STRAWX
 link bin/tcc.elf     "${BASE[@]}" $TCC
+link bin/audio.elf   "${BASE[@]}" $AUDIO
 link bin/fetch.elf   "${BASE[@]}" $FETCH $STRAWX $NETLIB obj/libbearssl.a
 link bin/netsurf.elf "${BASE[@]}" obj/libnetsurf.a $STRAWX $NETLIB obj/libbearssl.a
 link bin/discord.elf "${BASE[@]}" "${DISCORD[@]}" $STRAWX $NETLIB obj/libbearssl.a

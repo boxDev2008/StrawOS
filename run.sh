@@ -5,4 +5,7 @@ qemu-system-x86_64 -cdrom strawos-x86_64.iso -m 512M -display sdl -smp 4 \
     -device rtl8139,netdev=net0 \
     -device qemu-xhci,id=xhci \
     -device usb-kbd,bus=xhci.0 \
-    -device usb-mouse,bus=xhci.0
+    -device usb-mouse,bus=xhci.0 \
+    -audiodev ${STRAWOS_AUDIO:-pipewire},id=snd0 \
+    -device intel-hda \
+    -device hda-duplex,audiodev=snd0
