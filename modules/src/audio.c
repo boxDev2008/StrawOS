@@ -17,7 +17,10 @@ static int usage(void)
         "       audio tone [hz] [seconds]\n"
         "       audio play <file.wav>\n"
         "       audio record <file.wav> [seconds]\n"
-        "       audio volume [0-100]\n");
+        "       audio volume [0-100]\n"
+        "       audio devices\n"
+        "       audio output <id>\n"
+        "       audio input <id>\n");
     return 2;
 }
 
@@ -308,6 +311,43 @@ static int cmd_volume(int argc, char **argv)
     return 0;
 }
 
+static int cmd_devices(void)
+{
+    int fd = open_audio(O_WRONLY);
+    if (fd < 0)
+        return 1;
+    static struct audio_device_list list;
+    if (ioctl(fd, AUDIO_LIST_DEVICES, &list) != 0)
+    {
+        close(fd);
+        return 1;
+    }
+    for (uint32_t i = 0; i < list.count; i++)
+    {
+        const struct audio_device *d = &list.devices[i];
+        printf("%c %2u  %-6s %-24s %s\n", d->selected ? '*' : ' ', d->id, d->input ? "input" : "output", d->name,
+               d->key);
+    }
+    close(fd);
+    return 0;
+}
+
+static int cmd_select(bool input, const char *id_text)
+{
+    int fd = open_audio(O_WRONLY);
+    if (fd < 0)
+        return 1;
+    uint32_t id = (uint32_t)atoi(id_text);
+    int rc = ioctl(fd, input ? AUDIO_SET_INPUT_DEVICE : AUDIO_SET_OUTPUT_DEVICE, &id);
+    close(fd);
+    if (rc != 0)
+    {
+        fprintf(stderr, "audio: no %s device %u\n", input ? "input" : "output", id);
+        return 1;
+    }
+    return cmd_devices();
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
@@ -324,5 +364,9 @@ int main(int argc, char **argv)
         return cmd_record(argv[2], argc > 3 ? atof(argv[3]) : 5.0);
     if (!strcmp(cmd, "volume"))
         return cmd_volume(argc, argv);
+    if (!strcmp(cmd, "devices"))
+        return cmd_devices();
+    if ((!strcmp(cmd, "output") || !strcmp(cmd, "input")) && argc > 2)
+        return cmd_select(cmd[0] == 'i', argv[2]);
     return usage();
 }

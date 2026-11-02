@@ -14,6 +14,8 @@
 #define SIDEBAR_W   240
 #define HEADER_H    48
 #define USER_H      52
+#define VOICE_H     58
+#define VOICE_ROW   28
 #define INPUT_H     44
 #define INPUT_GAP   24
 #define AVATAR      40
@@ -42,6 +44,11 @@ typedef enum
     HIT_GUILD_AREA,
     HIT_SIDEBAR_AREA,
     HIT_MESSAGES_AREA,
+    HIT_VOICE,
+    HIT_CALL,
+    HIT_VC_MUTE,
+    HIT_VC_DEAF,
+    HIT_VC_LEAVE,
 }
 HitKind;
 
@@ -400,6 +407,7 @@ static void begin_login(const char *token)
 
 static void show_login(const char *error)
 {
+    vc_reset();
     gw_stop();
     store_reset();
     U.screen = SCREEN_LOGIN;
@@ -777,6 +785,149 @@ static void draw_speaker(SxCanvas *c, int x, int y, uint32_t color)
     sx_draw_circle(c, x + 13, y + 10, 4, 1.4f, color);
 }
 
+static void draw_mic(SxCanvas *c, int x, int y, uint32_t color, bool off)
+{
+    sx_fill_rounded_rect(c, x + 7, y + 2, 6, 10, 3, color);
+    sx_draw_line(c, x + 4, y + 9, x + 4, y + 11, 1.6f, color);
+    sx_draw_line(c, x + 16, y + 9, x + 16, y + 11, 1.6f, color);
+    sx_draw_line(c, x + 4, y + 11, x + 7, y + 15, 1.6f, color);
+    sx_draw_line(c, x + 16, y + 11, x + 13, y + 15, 1.6f, color);
+    sx_draw_line(c, x + 7, y + 15, x + 13, y + 15, 1.6f, color);
+    sx_draw_line(c, x + 10, y + 15, x + 10, y + 18, 1.6f, color);
+    if (off)
+        sx_draw_line(c, x + 3, y + 2, x + 17, y + 18, 2.0f, COL_RED);
+}
+
+static void draw_headphones(SxCanvas *c, int x, int y, uint32_t color, bool off)
+{
+    sx_draw_line(c, x + 4, y + 11, x + 4, y + 7, 1.6f, color);
+    sx_draw_line(c, x + 4, y + 7, x + 7, y + 3, 1.6f, color);
+    sx_draw_line(c, x + 7, y + 3, x + 13, y + 3, 1.6f, color);
+    sx_draw_line(c, x + 13, y + 3, x + 16, y + 7, 1.6f, color);
+    sx_draw_line(c, x + 16, y + 7, x + 16, y + 11, 1.6f, color);
+    sx_fill_rounded_rect(c, x + 2, y + 10, 5, 7, 2, color);
+    sx_fill_rounded_rect(c, x + 13, y + 10, 5, 7, 2, color);
+    if (off)
+        sx_draw_line(c, x + 3, y + 2, x + 17, y + 18, 2.0f, COL_RED);
+}
+
+static void draw_hangup(SxCanvas *c, int x, int y, uint32_t color)
+{
+    sx_draw_line(c, x + 3, y + 11, x + 17, y + 11, 3.0f, color);
+    sx_draw_line(c, x + 3, y + 11, x + 4, y + 14, 3.0f, color);
+    sx_draw_line(c, x + 17, y + 11, x + 16, y + 14, 3.0f, color);
+}
+
+static void draw_phone(SxCanvas *c, int x, int y, uint32_t color)
+{
+    sx_draw_line(c, x + 5, y + 3, x + 3, y + 7, 2.4f, color);
+    sx_draw_line(c, x + 3, y + 7, x + 8, y + 15, 2.0f, color);
+    sx_draw_line(c, x + 8, y + 15, x + 13, y + 18, 2.0f, color);
+    sx_draw_line(c, x + 13, y + 18, x + 17, y + 16, 2.4f, color);
+}
+
+static const char *display_name(Snowflake id)
+{
+    if (id == S.me.id)
+        return S.me.global_name && *S.me.global_name ? S.me.global_name : S.me.username ? S.me.username : "";
+    User *u = store_user(id);
+    if (u && u->global_name && *u->global_name)
+        return u->global_name;
+    if (u && u->username)
+        return u->username;
+    const char *name = store_user_name(id);
+    return name ? name : "Unknown user";
+}
+
+static int draw_voice_members(SxCanvas *c, Channel *ch, int x, int y, int w)
+{
+    const VoiceState *members[64];
+    int n = store_voice_members(ch->id, members, 64);
+    bool ours = vc_channel() == ch->id && vc_state() == VC_CONNECTED;
+    for (int i = 0; i < n; i++)
+    {
+        const VoiceState *v = members[i];
+        User *u = store_user(v->user_id);
+        bool speaking = ours && vc_speaking(v->user_id);
+        if (speaking)
+            sx_draw_circle(c, x + 12, y + 14, 12.5f, 2.0f, COL_GREEN);
+        draw_avatar(c, v->user_id, u ? u->avatar : NULL, u ? u->discriminator : NULL, x + 2, y + 4, 20);
+        int right = x + w;
+        if (v->deafened)
+        {
+            right -= 20;
+            draw_headphones(c, right, y + 4, COL_MUTED, true);
+        }
+        else if (v->muted)
+        {
+            right -= 20;
+            draw_mic(c, right, y + 4, COL_MUTED, true);
+        }
+        font_draw_ellipsis(c, FACE_REGULAR, 14, x + 30, y + 19, display_name(v->user_id), right - x - 34,
+                           speaking ? COL_HEADER : COL_MUTED);
+        y += VOICE_ROW;
+    }
+    return n * VOICE_ROW;
+}
+
+static void draw_voice_panel(SxCanvas *c, int x0, int vy)
+{
+    sx_fill_rect(c, x0, vy, SIDEBAR_W, VOICE_H, COL_PANEL);
+    sx_fill_rect(c, x0, vy + VOICE_H - 1, SIDEBAR_W, 1, COL_DIVIDER);
+    VcState st = vc_state();
+    const char *status;
+    uint32_t color;
+    switch (st)
+    {
+        case VC_CONNECTED:
+            status = "Voice Connected";
+            color = COL_GREEN;
+            break;
+        case VC_FAILED:
+            status = "Voice Disconnected";
+            color = COL_RED;
+            break;
+        default:
+            status = "Connecting...";
+            color = SX_RGB(0xF0, 0xB2, 0x32);
+            break;
+    }
+    font_draw_ellipsis(c, FACE_BOLD, 14, x0 + 12, vy + 22, status, SIDEBAR_W - 110, color);
+
+    char sub[160];
+    Channel *ch = store_channel(vc_channel());
+    if (st == VC_FAILED && vc_error()[0])
+        snprintf(sub, sizeof(sub), "%s", vc_error());
+    else if (ch)
+    {
+        char name[128];
+        store_channel_title(ch, name, sizeof(name));
+        Guild *g = ch->guild_id ? store_guild(ch->guild_id) : NULL;
+        snprintf(sub, sizeof(sub), "%s%s%s%s", vc_encrypted() ? "E2EE \xc2\xb7 " : "", name, g ? " / " : "",
+                 g ? g->name : "");
+    }
+    else
+        sub[0] = '\0';
+    font_draw_ellipsis(c, FACE_REGULAR, 12, x0 + 12, vy + 41, sub, SIDEBAR_W - 110, COL_MUTED);
+
+    int bx = x0 + SIDEBAR_W - 100;
+    struct { HitKind kind; int which; } buttons[3] = { { HIT_VC_MUTE, 0 }, { HIT_VC_DEAF, 1 }, { HIT_VC_LEAVE, 2 } };
+    for (int i = 0; i < 3; i++)
+    {
+        SxRect r = sx_rect(bx + i * 32, vy + 13, 30, 30);
+        if (hovering(r))
+            sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 4, COL_HOVER);
+        int ix = r.x + 5, iy = r.y + 5;
+        if (buttons[i].which == 0)
+            draw_mic(c, ix, iy, COL_TEXT, vc_muted() || vc_deafened());
+        else if (buttons[i].which == 1)
+            draw_headphones(c, ix, iy, COL_TEXT, vc_deafened());
+        else
+            draw_hangup(c, ix, iy, st == VC_FAILED ? COL_TEXT : COL_RED);
+        add_hit(buttons[i].kind, r, 0);
+    }
+}
+
 static void draw_sidebar(SxCanvas *c)
 {
     int x0 = GUILD_W;
@@ -789,7 +940,8 @@ static void draw_sidebar(SxCanvas *c)
     sx_fill_rect(c, x0, HEADER_H - 1, SIDEBAR_W, 1, COL_DIVIDER);
     (void)head;
 
-    SxRect list = sx_rect(x0, HEADER_H, SIDEBAR_W, U.h - HEADER_H - USER_H);
+    int voice_h = vc_state() != VC_OFF ? VOICE_H : 0;
+    SxRect list = sx_rect(x0, HEADER_H, SIDEBAR_W, U.h - HEADER_H - USER_H - voice_h);
     add_hit(HIT_SIDEBAR_AREA, list, 0);
     SxRect old = c->clip;
     sx_canvas_set_clip(c, sx_rect_intersect(old, list));
@@ -816,22 +968,27 @@ static void draw_sidebar(SxCanvas *c)
             }
             SxRect r = sx_rect(x0 + 8, y, SIDEBAR_W - 16, 32);
             bool text = store_channel_is_text(ch);
-            bool sel = ch->id == U.channel;
-            bool hov = text && hovering(r);
+            bool voice = ch->type == CH_VOICE || ch->type == CH_STAGE;
+            bool sel = ch->id == U.channel || (voice && ch->id == vc_channel() && vc_state() != VC_OFF);
+            bool hov = (text || voice) && hovering(r);
             if (sel)
                 sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 4, COL_SELECTED);
             else if (hov)
                 sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 4, COL_HOVER);
             uint32_t col = sel ? COL_HEADER : hov ? COL_TEXT : COL_MUTED;
             if (ch->type == CH_VOICE || ch->type == CH_STAGE)
-                draw_speaker(c, r.x + 8, r.y + 6, COL_FAINT);
+                draw_speaker(c, r.x + 8, r.y + 6, sel ? COL_TEXT : COL_FAINT);
             else
                 draw_hash(c, r.x + 8, r.y + 6, sel ? COL_TEXT : COL_FAINT);
             font_draw_ellipsis(c, sel ? FACE_BOLD : FACE_REGULAR, 15, r.x + 34, r.y + 21, ch->name ? ch->name : "",
-                               r.w - 42, text ? col : COL_FAINT);
+                               r.w - 42, text || voice ? col : COL_FAINT);
             if (text)
                 add_hit(HIT_CHANNEL, r, ch->id);
+            else if (voice)
+                add_hit(HIT_VOICE, r, ch->id);
             y += 34;
+            if (voice)
+                y += draw_voice_members(c, ch, x0 + 36, y - 2, SIDEBAR_W - 52);
         }
     }
     else
@@ -876,6 +1033,8 @@ static void draw_sidebar(SxCanvas *c)
     sx_canvas_set_clip(c, old);
 
     int uy = U.h - USER_H;
+    if (voice_h)
+        draw_voice_panel(c, x0, uy - voice_h);
     sx_fill_rect(c, x0, uy, SIDEBAR_W, USER_H, COL_PANEL);
     draw_avatar(c, S.me.id, S.me.avatar, S.me.discriminator, x0 + 10, uy + 10, 32);
     const char *me = S.me.global_name && *S.me.global_name ? S.me.global_name : S.me.username ? S.me.username : "";
@@ -1202,6 +1361,15 @@ static void draw_messages(SxCanvas *c)
             font_draw(c, FACE_BOLD, 18, hx, 31, "@", 1, COL_FAINT);
         hx += 28;
         int nw = font_draw_ellipsis(c, FACE_BOLD, 15, hx, 30, name, w - 200, COL_HEADER);
+        if (!ch->guild_id)
+        {
+            SxRect call = sx_rect(x0 + w - 46, 9, 30, 30);
+            bool in_call = vc_channel() == ch->id && vc_state() != VC_OFF && vc_state() != VC_FAILED;
+            if (hovering(call))
+                sx_fill_rounded_rect(c, call.x, call.y, call.w, call.h, 4, COL_HOVER);
+            draw_phone(c, call.x + 5, call.y + 5, in_call ? COL_GREEN : COL_TEXT);
+            add_hit(HIT_CALL, call, ch->id);
+        }
         if (ch->topic && *ch->topic)
         {
             sx_fill_rect(c, hx + nw + 12, 16, 1, 18, COL_SELECTED);
@@ -1506,6 +1674,32 @@ static void on_click(int x, int y)
         case HIT_LOGOUT:
             logout();
             break;
+        case HIT_VOICE:
+            vc_join(store_channel(h->id));
+            break;
+        case HIT_CALL:
+        {
+            Channel *ch = store_channel(h->id);
+            if (vc_channel() == h->id && vc_state() != VC_OFF && vc_state() != VC_FAILED)
+                vc_leave();
+            else if (ch)
+            {
+                vc_join(ch);
+                char path[96];
+                snprintf(path, sizeof(path), "/channels/%llu/call/ring", (unsigned long long)ch->id);
+                api_request("POST", path, "{\"recipients\":null}", NULL, NULL);
+            }
+            break;
+        }
+        case HIT_VC_MUTE:
+            vc_set_mute(!(vc_muted() || vc_deafened()));
+            break;
+        case HIT_VC_DEAF:
+            vc_set_deaf(!vc_deafened());
+            break;
+        case HIT_VC_LEAVE:
+            vc_leave();
+            break;
         case HIT_RETRY_LOAD:
         {
             Channel *ch = store_channel(h->id);
@@ -1700,6 +1894,7 @@ int main(int argc, char **argv)
         n += http_pollfds(fds + n, 40 - n);
         n += gw_pollfds(fds + n, 48 - n);
         n += ra_pollfds(fds + n, 48 - n);
+        n += vc_pollfds(fds + n, 48 - n);
 
         uint64_t now = uptime_ms();
         int64_t timeout = 530 - (int64_t)(now - U.caret_at);
@@ -1737,7 +1932,10 @@ int main(int argc, char **argv)
         http_pump();
         gw_step();
         ra_step();
+        vc_step();
         update_state();
+        if (vc_take_changed())
+            U.dirty = true;
 
         now = uptime_ms();
         if (now - U.caret_at >= 530)
@@ -1769,6 +1967,7 @@ int main(int argc, char **argv)
         }
     }
 
+    vc_leave();
     gw_stop();
     ra_stop();
     sx_window_destroy(U.win);

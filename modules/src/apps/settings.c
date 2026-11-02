@@ -6,6 +6,8 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h>
+#include <ioctl.h>
+#include <audio.h>
 #include <strawx.h>
 #include <ui.h>
 
@@ -30,12 +32,13 @@ typedef enum
     PAGE_WALLPAPER,
     PAGE_DESKTOP,
     PAGE_MOUSE,
+    PAGE_SOUND,
     PAGE_ABOUT,
     PAGE_COUNT,
 }
 Page;
 
-static const char *page_names[PAGE_COUNT] = { "Appearance", "Wallpaper", "Desktop & Panel", "Mouse", "About" };
+static const char *page_names[PAGE_COUNT] = { "Appearance", "Wallpaper", "Desktop & Panel", "Mouse", "Sound", "About" };
 
 typedef struct
 {
@@ -81,6 +84,8 @@ typedef enum
     HIT_SOLID,
     HIT_TOGGLE,
     HIT_SPEED,
+    HIT_AUDIO_DEVICE,
+    HIT_AUDIO_SLIDER,
 }
 HitKind;
 
@@ -527,6 +532,232 @@ static void draw_mouse_page(SxCanvas *c)
     sx_draw_text(c, &sx_font_sans_small, content_x(), 194, "and press Ctrl+Alt+G to release it.", SX_THEME_TEXT_DIM);
 }
 
+#define VOLUME_MAX_IN  200
+#define ROW_H          40
+#define METER_MS       50
+
+static struct
+{
+    bool                     have;
+    struct audio_device_list list;
+    int                      volume[2];
+    int                      dragging;
+    int                      mic;
+    int                      level;
+    uint64_t                 level_at;
+}
+A = { .dragging = -1, .mic = -1 };
+
+static int audio_max(int which)
+{
+    return which ? VOLUME_MAX_IN : 100;
+}
+
+static void audio_refresh(void)
+{
+    int fd = open(AUDIO_DEVICE, O_WRONLY);
+    A.have = fd >= 0 && ioctl(fd, AUDIO_LIST_DEVICES, &A.list) == 0 && A.list.count > 0;
+    if (fd >= 0)
+    {
+        uint32_t v = 100;
+        if (A.dragging != 0 && ioctl(fd, AUDIO_GET_VOLUME, &v) == 0)
+            A.volume[0] = (int)v;
+        if (A.dragging != 1 && ioctl(fd, AUDIO_GET_INPUT_VOLUME, &v) == 0)
+            A.volume[1] = (int)v;
+        close(fd);
+    }
+}
+
+static void audio_ioctl(uint64_t request, uint32_t value)
+{
+    int fd = open(AUDIO_DEVICE, O_WRONLY);
+    if (fd < 0)
+        return;
+    ioctl(fd, request, &value);
+    close(fd);
+}
+
+static void mic_open(void)
+{
+    if (A.mic < 0)
+        A.mic = open(AUDIO_DEVICE, O_RDONLY);
+    A.level = 0;
+}
+
+static void mic_close(void)
+{
+    if (A.mic >= 0)
+        close(A.mic);
+    A.mic = -1;
+    A.level = 0;
+}
+
+static bool mic_update(void)
+{
+    if (A.mic < 0)
+        return false;
+    struct audio_state st;
+    if (ioctl(A.mic, AUDIO_GET_STATE, &st) != 0)
+        return false;
+    static int16_t buf[4096];
+    int peak = 0;
+    uint32_t avail = st.capture_avail & ~3u;
+    while (avail > 0)
+    {
+        uint32_t n = avail > sizeof(buf) ? (uint32_t)sizeof(buf) : avail;
+        if (read(A.mic, buf, n) != (ssize_t)n)
+            break;
+        for (uint32_t i = 0; i < n / 2; i++)
+        {
+            int v = buf[i] < 0 ? -buf[i] : buf[i];
+            if (v > peak)
+                peak = v;
+        }
+        avail -= n;
+    }
+    int level = peak * 1000 / 32768;
+    int old = A.level;
+    A.level = level > A.level ? level : A.level * 4 / 5;
+    return A.level / 10 != old / 10;
+}
+
+static void select_device(int i)
+{
+    const struct audio_device *d = &A.list.devices[i];
+    audio_ioctl(d->input ? AUDIO_SET_INPUT_DEVICE : AUDIO_SET_OUTPUT_DEVICE, d->id);
+    sx_setting_set(d->input ? "audio_input" : "audio_output", d->key);
+    if (d->input && A.mic >= 0)
+    {
+        mic_close();
+        mic_open();
+    }
+    audio_refresh();
+}
+
+typedef struct
+{
+    SxRect rows[AUDIO_MAX_DEVICES];
+    int    header[2];
+    SxRect track[2];
+    SxRect slider[2];
+    int    label[2];
+    SxRect meter;
+}
+SoundLayout;
+
+static SoundLayout sound_layout(void)
+{
+    SoundLayout l;
+    memset(&l, 0, sizeof(l));
+    int y = 84;
+    for (int input = 0; input < 2; input++)
+    {
+        l.header[input] = y;
+        y += 30;
+        for (uint32_t i = 0; i < A.list.count; i++)
+            if (A.list.devices[i].input == input)
+            {
+                l.rows[i] = sx_rect(content_x(), y, content_w(), ROW_H - 4);
+                y += ROW_H;
+            }
+        y += 8;
+        l.label[input] = y;
+        l.track[input] = sx_rect(content_x() + 12, y + 34, content_w() - 24, 6);
+        l.slider[input] = sx_rect(content_x(), y + 18, content_w(), 38);
+        y += 66;
+        if (input)
+            l.meter = sx_rect(content_x() + 12, y, content_w() - 24, 8);
+        y += 18;
+    }
+    return l;
+}
+
+static void set_volume_from_x(int which, int x)
+{
+    SoundLayout l = sound_layout();
+    SxRect t = l.track[which];
+    int max = audio_max(which);
+    int v = (x - t.x) * max / (t.w > 0 ? t.w : 1);
+    v = v < 0 ? 0 : v > max ? max : v;
+    v = (v + 2) / 5 * 5;
+    if (v == A.volume[which])
+        return;
+    A.volume[which] = v;
+    audio_ioctl(which ? AUDIO_SET_INPUT_VOLUME : AUDIO_SET_VOLUME, (uint32_t)v);
+}
+
+static void save_volume(int which)
+{
+    sx_setting_set_int(which ? "audio_input_volume" : "audio_volume", A.volume[which]);
+}
+
+static void draw_slider(SxCanvas *c, SxRect t, int value, int max, int mark, bool hot)
+{
+    int kx = t.x + value * t.w / max;
+    sx_fill_rounded_rect(c, t.x, t.y, t.w, t.h, t.h / 2, sx_darken(SX_THEME_BG, 35));
+    sx_fill_rounded_rect(c, t.x, t.y, kx - t.x, t.h, t.h / 2, SX_THEME_ACCENT);
+    if (mark >= 0)
+        sx_fill_rect(c, t.x + mark * t.w / max, t.y + t.h + 5, 1, 6, SX_THEME_TEXT_DIM);
+    float ky = t.y + t.h * 0.5f;
+    sx_fill_circle(c, (float)kx, ky + 1, hot ? 11.0f : 10.0f, SX_RGBA(0, 0, 0, 60));
+    sx_fill_circle(c, (float)kx, ky, hot ? 11.0f : 10.0f, SX_RGB(255, 255, 255));
+}
+
+static void draw_sound_page(SxCanvas *c)
+{
+    draw_title(c, "Sound", "Choose where sound plays and which microphone to use");
+    if (!A.have)
+    {
+        sx_draw_text(c, &sx_font_sans, content_x(), 96, "No sound card was found.", SX_THEME_TEXT_DIM);
+        return;
+    }
+
+    SoundLayout l = sound_layout();
+    static const char *headers[2] = { "Output device", "Input device" };
+    static const char *labels[2] = { "Output volume", "Input volume" };
+    for (int input = 0; input < 2; input++)
+    {
+        sx_draw_text(c, &sx_font_sans_bold, content_x(), l.header[input], headers[input], SX_THEME_TEXT);
+        bool any = false;
+        for (uint32_t i = 0; i < A.list.count; i++)
+        {
+            const struct audio_device *d = &A.list.devices[i];
+            if (d->input != input)
+                continue;
+            any = true;
+            SxRect r = l.rows[i];
+            if (d->selected)
+                sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 8, (SX_THEME_ACCENT & 0xFFFFFFu) | (40u << 24));
+            else if (hovering(HIT_AUDIO_DEVICE, (int)i))
+                sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 8, SX_RGBA(255, 255, 255, 14));
+            float cx = r.x + 20, cy = r.y + r.h * 0.5f;
+            sx_draw_circle(c, cx, cy, 8, 1.6f, d->selected ? SX_THEME_ACCENT : SX_THEME_TEXT_DIM);
+            if (d->selected)
+                sx_fill_circle(c, cx, cy, 4.5f, SX_THEME_ACCENT);
+            sx_draw_text(c, &sx_font_sans, r.x + 40, sx_text_y_centered(&sx_font_sans, r), d->name,
+                         d->selected ? SX_THEME_TEXT : SX_THEME_TEXT_DIM);
+        }
+        if (!any)
+            sx_draw_text(c, &sx_font_sans, content_x(), l.header[input] + 30, "None available", SX_THEME_TEXT_DIM);
+
+        sx_draw_text(c, &sx_font_sans, content_x(), l.label[input], labels[input], SX_THEME_TEXT);
+        char value[16];
+        snprintf(value, sizeof(value), "%d%%", A.volume[input]);
+        int vw = sx_text_width(&sx_font_sans, value);
+        sx_draw_text(c, &sx_font_sans, content_x() + content_w() - vw, l.label[input], value, SX_THEME_TEXT_DIM);
+        draw_slider(c, l.track[input], A.volume[input], audio_max(input), input ? 100 : -1,
+                    A.dragging == input || hovering(HIT_AUDIO_SLIDER, input));
+    }
+
+    SxRect m = l.meter;
+    sx_fill_rounded_rect(c, m.x, m.y, m.w, m.h, m.h / 2, sx_darken(SX_THEME_BG, 35));
+    int lw = m.w * (A.level > 1000 ? 1000 : A.level) / 1000;
+    if (lw > 0)
+        sx_fill_rounded_rect(c, m.x, m.y, lw, m.h, m.h / 2, A.level > 900 ? SX_RGB(0xE0, 0x50, 0x50) : SX_RGB(0x3C, 0xC0, 0x70));
+    sx_draw_text(c, &sx_font_sans_small, m.x, m.y + 14,
+                 A.mic >= 0 ? "Microphone level" : "Microphone unavailable", SX_THEME_TEXT_DIM);
+}
+
 static void draw_about_page(SxCanvas *c)
 {
     int x = content_x();
@@ -589,6 +820,7 @@ static void draw(void)
         case PAGE_WALLPAPER: draw_wallpaper_page(c); break;
         case PAGE_DESKTOP:   draw_desktop_page(c); break;
         case PAGE_MOUSE:     draw_mouse_page(c); break;
+        case PAGE_SOUND:     draw_sound_page(c); break;
         default:             draw_about_page(c); break;
     }
 
@@ -648,6 +880,19 @@ static Hit hit_test(int x, int y)
             if (sx_rect_contains(speed_hit_rect(), x, y))
                 return (Hit){ HIT_SPEED, 0 };
             break;
+        case PAGE_SOUND:
+        {
+            if (!A.have)
+                break;
+            SoundLayout l = sound_layout();
+            for (uint32_t i = 0; i < A.list.count; i++)
+                if (sx_rect_contains(l.rows[i], x, y))
+                    return (Hit){ HIT_AUDIO_DEVICE, (int)i };
+            for (int i = 0; i < 2; i++)
+                if (sx_rect_contains(l.slider[i], x, y))
+                    return (Hit){ HIT_AUDIO_SLIDER, i };
+            break;
+        }
         default:
             break;
     }
@@ -663,6 +908,19 @@ static void clamp_scroll(void)
         G.scroll = 0;
 }
 
+static void enter_page(void)
+{
+    if (G.page == PAGE_SOUND)
+    {
+        audio_refresh();
+        mic_open();
+    }
+    else
+    {
+        mic_close();
+    }
+}
+
 static void activate(Hit h)
 {
     switch (h.kind)
@@ -670,6 +928,7 @@ static void activate(Hit h)
         case HIT_PAGE:
             G.page = (Page)h.index;
             G.scroll = 0;
+            enter_page();
             if (G.page == PAGE_WALLPAPER)
             {
                 load_walls();
@@ -689,6 +948,9 @@ static void activate(Hit h)
             apply_wallpaper(spec);
             break;
         }
+        case HIT_AUDIO_DEVICE:
+            select_device(h.index);
+            break;
         case HIT_TOGGLE:
         {
             const char *key = toggles[h.index].key;
@@ -722,6 +984,7 @@ int main(int argc, char **argv)
         load_walls();
     refresh_current();
     load_speed();
+    enter_page();
     draw();
 
     uint64_t last_about = sx_time_ms();
@@ -729,9 +992,24 @@ int main(int argc, char **argv)
     for (;;)
     {
         SxEvent ev;
-        int rc = sx_next_event(&ev, G.page == PAGE_ABOUT ? 1000 : -1);
+        int rc = sx_next_event(&ev, G.page == PAGE_ABOUT ? 1000 : G.page == PAGE_SOUND ? METER_MS : -1);
         if (rc < 0)
             break;
+        if (G.page == PAGE_SOUND && sx_time_ms() - A.level_at >= METER_MS)
+        {
+            A.level_at = sx_time_ms();
+            if (mic_update())
+                dirty = true;
+            if (rc == 0)
+            {
+                if (dirty && !sx_pending())
+                {
+                    draw();
+                    dirty = false;
+                }
+                continue;
+            }
+        }
         if (rc == 0)
         {
             if (G.page == PAGE_ABOUT && sx_time_ms() - last_about >= 1000)
@@ -758,6 +1036,8 @@ int main(int argc, char **argv)
                 refresh_current();
                 if (!G.dragging_speed)
                     load_speed();
+                if (G.page == PAGE_SOUND)
+                    audio_refresh();
                 redraw = true;
                 break;
 
@@ -766,6 +1046,12 @@ int main(int argc, char **argv)
                 if (G.dragging_speed)
                 {
                     redraw |= set_speed_from_x(ev.x);
+                    break;
+                }
+                if (A.dragging >= 0)
+                {
+                    set_volume_from_x(A.dragging, ev.x);
+                    redraw = true;
                     break;
                 }
                 Hit h = hit_test(ev.x, ev.y);
@@ -791,6 +1077,11 @@ int main(int argc, char **argv)
                         G.dragging_speed = true;
                         set_speed_from_x(ev.x);
                     }
+                    else if (h.kind == HIT_AUDIO_SLIDER)
+                    {
+                        A.dragging = h.index;
+                        set_volume_from_x(h.index, ev.x);
+                    }
                     else
                         activate(h);
                     G.hover = hit_test(ev.x, ev.y);
@@ -799,6 +1090,14 @@ int main(int argc, char **argv)
                 break;
 
             case SX_EVENT_MOUSE_UP:
+                if (ev.button == SX_BUTTON_LEFT && A.dragging >= 0)
+                {
+                    save_volume(A.dragging);
+                    A.dragging = -1;
+                    G.hover = hit_test(ev.x, ev.y);
+                    redraw = true;
+                    break;
+                }
                 if (ev.button == SX_BUTTON_LEFT && G.dragging_speed)
                 {
                     G.dragging_speed = false;
@@ -831,6 +1130,7 @@ int main(int argc, char **argv)
                 else if (ev.key == SX_KEY_UP && G.page > 0)
                     G.page = (Page)(G.page - 1);
                 G.scroll = 0;
+                enter_page();
                 redraw = true;
                 break;
 

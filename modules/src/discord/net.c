@@ -792,6 +792,7 @@ struct WsMsg
 {
     char  *data;
     size_t len;
+    bool   binary;
     WsMsg *next;
 };
 
@@ -803,6 +804,7 @@ struct Ws
     Buf      in;
     Buf      msg;
     bool     in_msg;
+    bool     msg_binary;
     WsMsg   *head;
     WsMsg   *tail;
     int      close_code;
@@ -899,6 +901,12 @@ void ws_send(Ws *ws, const char *text, size_t len)
         ws_send_frame(ws, 1, text, len);
 }
 
+void ws_send_binary(Ws *ws, const void *data, size_t len)
+{
+    if (ws->state == WS_OPEN)
+        ws_send_frame(ws, 2, data, len);
+}
+
 static void push_message(Ws *ws)
 {
     WsMsg *m = malloc(sizeof(WsMsg));
@@ -906,6 +914,7 @@ static void push_message(Ws *ws)
         return;
     m->data = ws->msg.data ? ws->msg.data : xstrdup("");
     m->len = ws->msg.len;
+    m->binary = ws->msg_binary;
     m->next = NULL;
     ws->msg.data = NULL;
     ws->msg.len = ws->msg.cap = 0;
@@ -974,6 +983,7 @@ static void parse_frames(Ws *ws)
                 {
                     buf_free(&ws->msg);
                     ws->in_msg = true;
+                    ws->msg_binary = op == 2;
                 }
                 if (ws->in_msg)
                     buf_append(&ws->msg, payload, (size_t)len);
@@ -1058,7 +1068,7 @@ WsState ws_step(Ws *ws)
     return ws->state;
 }
 
-bool ws_recv(Ws *ws, char **msg, size_t *len)
+bool ws_recv_msg(Ws *ws, char **msg, size_t *len, bool *binary)
 {
     WsMsg *m = ws->head;
     if (!m)
@@ -1068,8 +1078,15 @@ bool ws_recv(Ws *ws, char **msg, size_t *len)
         ws->tail = NULL;
     *msg = m->data;
     *len = m->len;
+    if (binary)
+        *binary = m->binary;
     free(m);
     return true;
+}
+
+bool ws_recv(Ws *ws, char **msg, size_t *len)
+{
+    return ws_recv_msg(ws, msg, len, NULL);
 }
 
 int ws_close_code(Ws *ws)

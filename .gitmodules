@@ -53,3 +53,6 @@
 [submodule "modules/lib/classicube"]
 	path = modules/lib/classicube
 	url = https://github.com/ClassiCube/ClassiCube
+[submodule "modules/lib/opus"]
+	path = modules/lib/opus
+	url = https://github.com/xiph/opus

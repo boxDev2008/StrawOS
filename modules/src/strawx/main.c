@@ -13,6 +13,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <audio.h>
 
 #include <strawx.h>
 #include <ui.h>
@@ -37,6 +38,42 @@ static void broadcast_theme_changed(void)
             send_raw(&S.clients[i], &ev, sizeof(ev));
 }
 
+static void audio_select(int fd, const struct audio_device_list *list, const char *key, bool input)
+{
+    char want[SX_SETTING_MAX];
+    if (!sx_setting_get(key, want, sizeof(want)) || !want[0])
+        return;
+    for (uint32_t i = 0; i < list->count; i++)
+    {
+        const struct audio_device *d = &list->devices[i];
+        if (d->input == input && strcmp(d->key, want) == 0)
+        {
+            uint32_t id = d->id;
+            if (!d->selected)
+                ioctl(fd, input ? AUDIO_SET_INPUT_DEVICE : AUDIO_SET_OUTPUT_DEVICE, &id);
+            return;
+        }
+    }
+}
+
+static void audio_settings_load(void)
+{
+    int fd = open(AUDIO_DEVICE, O_WRONLY);
+    if (fd < 0)
+        return;
+    uint32_t volume = (uint32_t)sx_setting_get_int("audio_volume", 100);
+    uint32_t input = (uint32_t)sx_setting_get_int("audio_input_volume", 100);
+    ioctl(fd, AUDIO_SET_VOLUME, &volume);
+    ioctl(fd, AUDIO_SET_INPUT_VOLUME, &input);
+    static struct audio_device_list list;
+    if (ioctl(fd, AUDIO_LIST_DEVICES, &list) == 0)
+    {
+        audio_select(fd, &list, "audio_output", false);
+        audio_select(fd, &list, "audio_input", true);
+    }
+    close(fd);
+}
+
 static void settings_load(void)
 {
     const SxTheme *old_theme = sx_theme;
@@ -50,6 +87,7 @@ static void settings_load(void)
     S.pointer_speed = sx_setting_get_int("mouse_speed", 100);
     S.animations = sx_setting_get_int("animations", 1) != 0;
     wallpaper_generate();
+    audio_settings_load();
 }
 
 static bool display_init(void)

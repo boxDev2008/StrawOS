@@ -109,7 +109,9 @@ typedef struct Ws Ws;
 Ws         *ws_open(const char *url, const char *origin);
 WsState     ws_step(Ws *ws);
 bool        ws_recv(Ws *ws, char **msg, size_t *len);
+bool        ws_recv_msg(Ws *ws, char **msg, size_t *len, bool *binary);
 void        ws_send(Ws *ws, const char *text, size_t len);
+void        ws_send_binary(Ws *ws, const void *data, size_t len);
 int         ws_close_code(Ws *ws);
 const char *ws_error(Ws *ws);
 int         ws_pollfd(Ws *ws, struct pollfd *pfd);
@@ -307,6 +309,16 @@ User;
 
 typedef struct
 {
+    Snowflake guild_id;
+    Snowflake channel_id;
+    Snowflake user_id;
+    bool      muted;
+    bool      deafened;
+}
+VoiceState;
+
+typedef struct
+{
     User      me;
     bool      ready;
 
@@ -315,6 +327,9 @@ typedef struct
 
     Channel **dms;
     int       dm_count;
+
+    VoiceState *voice;
+    int         voice_count;
 
     int       version;
 }
@@ -330,6 +345,9 @@ void     store_on_channel(Json *c, bool deleted);
 void     store_on_message_create(Json *m);
 void     store_on_message_update(Json *m);
 void     store_on_message_delete(Json *m);
+void     store_on_voice_state(Json *vs, Snowflake guild_id);
+void     store_on_members_chunk(Json *d);
+int      store_voice_members(Snowflake channel_id, const VoiceState **out, int max);
 void     store_load_messages(Channel *ch, Json *arr, bool older);
 Channel *store_channel(Snowflake id);
 Guild   *store_guild(Snowflake id);
@@ -353,6 +371,7 @@ typedef enum
 }
 GwState;
 
+void        gw_send(const char *json);
 void        gw_start(const char *token);
 void        gw_stop(void);
 void        gw_step(void);
@@ -385,6 +404,34 @@ const char *ra_error(void);
 int         ra_pollfds(struct pollfd *fds, int max);
 bool        ra_has_buffered(void);
 uint64_t    ra_next_deadline(void);
+
+typedef enum
+{
+    VC_OFF,
+    VC_JOINING,
+    VC_CONNECTING,
+    VC_CONNECTED,
+    VC_FAILED,
+}
+VcState;
+
+void        vc_join(Channel *ch);
+void        vc_leave(void);
+void        vc_set_mute(bool muted);
+void        vc_set_deaf(bool deafened);
+void        vc_on_state_update(Json *d);
+void        vc_on_server_update(Json *d);
+void        vc_reset(void);
+void        vc_step(void);
+int         vc_pollfds(struct pollfd *fds, int max);
+VcState     vc_state(void);
+Snowflake   vc_channel(void);
+bool        vc_muted(void);
+bool        vc_deafened(void);
+bool        vc_encrypted(void);
+bool        vc_speaking(Snowflake user);
+const char *vc_error(void);
+bool        vc_take_changed(void);
 
 extern char api_base[256];
 extern char gateway_url[256];

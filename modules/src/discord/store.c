@@ -199,6 +199,7 @@ void store_reset(void)
     free(user_table);
     user_table = NULL;
     user_cap = user_count = 0;
+    free(S.voice);
     int version = S.version;
     memset(&S, 0, sizeof(S));
     S.version = version + 1;
@@ -507,6 +508,8 @@ static void order_guilds(Json *settings)
             }
 }
 
+static void voice_states_of(Json *g);
+
 void store_on_ready(Json *d)
 {
     Json *me = json_get(d, "user");
@@ -539,6 +542,7 @@ void store_on_ready(Json *d)
             Guild *parsed = guild_parse(g, mine);
             if (parsed)
                 guild_store(parsed, -1);
+            voice_states_of(g);
             if (mm)
                 mm = mm->next;
         }
@@ -560,12 +564,87 @@ void store_on_ready(Json *d)
     S.version++;
 }
 
+static void voice_states_of(Json *g)
+{
+    Snowflake gid = json_id(g, "id");
+    Json *vs = json_get(g, "voice_states");
+    if (vs && vs->type == JSON_ARRAY)
+        for (Json *v = vs->child; v; v = v->next)
+            store_on_voice_state(v, gid);
+}
+
 void store_on_guild_create(Json *g)
 {
     Guild *parsed = guild_parse(g, NULL);
     if (parsed)
         guild_store(parsed, -1);
+    voice_states_of(g);
     S.version++;
+}
+
+void store_on_voice_state(Json *vs, Snowflake guild_id)
+{
+    Snowflake user = json_id(vs, "user_id");
+    if (!user)
+        return;
+    Snowflake gid = json_id(vs, "guild_id");
+    if (!gid)
+        gid = guild_id;
+    Json *member = json_get(vs, "member");
+    Json *mu = member ? json_get(member, "user") : NULL;
+    if (mu && mu->type == JSON_OBJECT)
+        user_update(mu);
+
+    int idx = -1;
+    for (int i = 0; i < S.voice_count; i++)
+        if (S.voice[i].user_id == user && S.voice[i].guild_id == gid)
+            idx = i;
+    Snowflake channel = json_id(vs, "channel_id");
+    if (!channel)
+    {
+        if (idx >= 0)
+            S.voice[idx] = S.voice[--S.voice_count];
+        S.version++;
+        return;
+    }
+    if (idx < 0)
+    {
+        VoiceState *nv = realloc(S.voice, sizeof(VoiceState) * (size_t)(S.voice_count + 1));
+        if (!nv)
+            return;
+        S.voice = nv;
+        idx = S.voice_count++;
+    }
+    VoiceState *v = &S.voice[idx];
+    v->guild_id = gid;
+    v->channel_id = channel;
+    v->user_id = user;
+    v->muted = json_bool(vs, "mute") || json_bool(vs, "self_mute");
+    v->deafened = json_bool(vs, "deaf") || json_bool(vs, "self_deaf");
+    S.version++;
+}
+
+void store_on_members_chunk(Json *d)
+{
+    Json *members = json_get(d, "members");
+    if (!members || members->type != JSON_ARRAY)
+        return;
+    for (Json *m = members->child; m; m = m->next)
+    {
+        Json *u = json_get(m, "user");
+        if (u && u->type == JSON_OBJECT)
+            user_update(u);
+    }
+    S.version++;
+}
+
+int store_voice_members(Snowflake channel_id, const VoiceState **out, int max)
+{
+    int n = 0;
+    for (int i = 0; i < S.voice_count && n < max; i++)
+        if (S.voice[i].channel_id == channel_id)
+            out[n++] = &S.voice[i];
+    return n;
 }
 
 void store_on_guild_delete(Json *g)

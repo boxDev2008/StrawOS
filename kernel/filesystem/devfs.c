@@ -137,6 +137,7 @@ _Static_assert(sizeof(NetInfo) == 17, "NetInfo layout is shared with libc");
 _Static_assert(sizeof(RtcTime) == 8, "RtcTime layout is shared with libc");
 _Static_assert(sizeof(AudioInfo) == 24, "AudioInfo layout is shared with libc");
 _Static_assert(sizeof(AudioState) == 16, "AudioState layout is shared with libc");
+_Static_assert(sizeof(AudioDevice) == 96, "AudioDevice layout is shared with libc");
 
 static ssize_t devfs_record_read(VFile *file, const void *data, size_t size, void *buf, size_t count)
 {

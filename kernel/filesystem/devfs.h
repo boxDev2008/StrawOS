@@ -66,6 +66,33 @@ NetInfo;
 #define DEVFS_IOCTL_AUDIO_SET_VOLUME 0x1102
 #define DEVFS_IOCTL_AUDIO_GET_VOLUME 0x1103
 #define DEVFS_IOCTL_AUDIO_DROP       0x1104
+#define DEVFS_IOCTL_AUDIO_LIST_DEVICES      0x1105
+#define DEVFS_IOCTL_AUDIO_SET_OUTPUT_DEVICE 0x1106
+#define DEVFS_IOCTL_AUDIO_SET_INPUT_DEVICE  0x1107
+#define DEVFS_IOCTL_AUDIO_SET_INPUT_VOLUME  0x1108
+#define DEVFS_IOCTL_AUDIO_GET_INPUT_VOLUME  0x1109
+
+#define AUDIO_MAX_DEVICES 16
+
+typedef struct
+{
+    uint32_t id;
+    uint8_t  input;
+    uint8_t  selected;
+    uint8_t  type;
+    uint8_t  reserved;
+    char     name[48];
+    char     key[40];
+}
+AudioDevice;
+
+typedef struct
+{
+    uint32_t    count;
+    uint32_t    reserved;
+    AudioDevice devices[AUDIO_MAX_DEVICES];
+}
+AudioDeviceList;
 
 typedef struct
 {

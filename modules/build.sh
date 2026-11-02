@@ -75,6 +75,8 @@ PIDS+=($!)
 PIDS+=($!)
 ./classicube.sh &
 PIDS+=($!)
+./opus.sh &
+PIDS+=($!)
 
 compile lib/libc/crt0.c;   CRT0=$OUT
 compile lib/libc/libc.c;   LIBC=$OUT
@@ -106,6 +108,15 @@ for src in src/discord/*.c; do
     DISCORD+=($OUT)
 done
 
+VOICE=()
+for src in src/discord/voice/*.c; do
+    compile "$src" "${NET[@]}" -Ilib/opus/include
+    VOICE+=($OUT)
+done
+for dep in net json util; do
+    VOICE+=($OBJ/src_discord_$dep.o)
+done
+
 APPS=()
 for app in files notes paint calc clock sysmon cube viewer settings terminal; do
     if [ -f src/apps/$app.c ]; then
@@ -124,6 +135,7 @@ link bin/audio.elf   "${BASE[@]}" $AUDIO
 link bin/fetch.elf   "${BASE[@]}" $FETCH $STRAWX $NETLIB obj/libbearssl.a
 link bin/netsurf.elf "${BASE[@]}" obj/libnetsurf.a $STRAWX $NETLIB obj/libbearssl.a
 link bin/discord.elf "${BASE[@]}" "${DISCORD[@]}" $STRAWX $NETLIB obj/libbearssl.a
+link bin/discord-voice.elf "${BASE[@]}" "${VOICE[@]}" $STRAWX $NETLIB obj/libbearssl.a obj/libopus.a
 link bin/lite-xl.elf "${BASE[@]}" obj/liblitexl.a obj/libfreetype.a obj/libpcre2.a $LUA $STRAWX
 link bin/classicube.elf "${BASE[@]}" obj/libclassicube.a $STRAWX
 for entry in "${APPS[@]}"; do

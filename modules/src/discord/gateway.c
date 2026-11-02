@@ -107,6 +107,12 @@ const char *gw_error(void)
     return error_text;
 }
 
+void gw_send(const char *json)
+{
+    if (ws)
+        ws_send(ws, json, strlen(json));
+}
+
 static void send_heartbeat(void)
 {
     char msg[64];
@@ -153,12 +159,54 @@ static void send_identify(void)
     buf_free(&b);
 }
 
+#define MAX_REQUESTED 1024
+
+static Snowflake requested[MAX_REQUESTED];
+static int       n_requested;
+
+static bool was_requested(Snowflake id)
+{
+    for (int i = 0; i < n_requested; i++)
+        if (requested[i] == id)
+            return true;
+    return false;
+}
+
+static void request_voice_members(void)
+{
+    for (int i = 0; i < S.voice_count; i++)
+    {
+        Snowflake guild = S.voice[i].guild_id;
+        if (!guild || store_user(S.voice[i].user_id) || was_requested(S.voice[i].user_id))
+            continue;
+        Buf b = { 0 };
+        buf_printf(&b, "{\"op\":8,\"d\":{\"guild_id\":\"%llu\",\"presences\":false,\"user_ids\":[",
+                   (unsigned long long)guild);
+        int n = 0;
+        for (int j = i; j < S.voice_count && n < 100 && n_requested < MAX_REQUESTED; j++)
+        {
+            const VoiceState *v = &S.voice[j];
+            if (v->guild_id != guild || store_user(v->user_id) || was_requested(v->user_id))
+                continue;
+            buf_printf(&b, "%s\"%llu\"", n ? "," : "", (unsigned long long)v->user_id);
+            requested[n_requested++] = v->user_id;
+            n++;
+        }
+        buf_puts(&b, "]}}");
+        if (n)
+            ws_send(ws, b.data, b.len);
+        buf_free(&b);
+    }
+}
+
 static void dispatch(const char *t, Json *d)
 {
     if (strcmp(t, "READY") == 0)
     {
         if (S.ready)
             store_reset();
+        vc_reset();
+        n_requested = 0;
         snprintf(session_id, sizeof(session_id), "%s", json_str(d, "session_id") ? json_str(d, "session_id") : "");
         const char *ru = json_str(d, "resume_gateway_url");
         if (ru)
@@ -186,6 +234,19 @@ static void dispatch(const char *t, Json *d)
         store_on_message_update(d);
     else if (strcmp(t, "MESSAGE_DELETE") == 0)
         store_on_message_delete(d);
+    else if (strcmp(t, "VOICE_STATE_UPDATE") == 0)
+    {
+        store_on_voice_state(d, 0);
+        vc_on_state_update(d);
+    }
+    else if (strcmp(t, "VOICE_SERVER_UPDATE") == 0)
+        vc_on_server_update(d);
+    else if (strcmp(t, "GUILD_MEMBERS_CHUNK") == 0)
+        store_on_members_chunk(d);
+    else
+        return;
+    if (strcmp(t, "READY") == 0 || strcmp(t, "GUILD_CREATE") == 0 || strcmp(t, "VOICE_STATE_UPDATE") == 0)
+        request_voice_members();
 }
 
 static void handle(const char *text, size_t len)
