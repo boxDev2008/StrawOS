@@ -161,6 +161,7 @@ HdaPath;
 typedef struct
 {
     volatile uint8_t *regs;
+    volatile uint32_t *dpos;
     uint8_t     *buf;
     HdaBdlEntry *bdl;
     uint8_t      tag;
@@ -181,6 +182,7 @@ typedef struct
     uint16_t           rirb_rp;
     int                iss;
     int                oss;
+    volatile uint32_t *dpos;
     PciDevice          pci;
     HdaStream          out;
     HdaStream          in;
@@ -763,6 +765,7 @@ static void hda_scan_codec(HdaCtl *ctl, uint8_t cad)
 static bool hda_stream_alloc(HdaCtl *c, HdaStream *s, int index, uint8_t tag)
 {
     s->regs = c->mmio + HDA_REG_SD_BASE + index * HDA_SD_STRIDE;
+    s->dpos = c->dpos ? c->dpos + index * 2 : NULL;
     s->tag = tag;
     s->buf = hda_dma_alloc(c, HDA_BUF_PAGES);
     s->bdl = hda_dma_alloc(c, 1);
@@ -810,6 +813,8 @@ static void hda_stream_start(HdaStream *s)
 
     s->last_lpib = 0;
     s->pos = 0;
+    if (s->dpos)
+        *s->dpos = 0;
 
     sd_wr32(s, HDA_SD_CTL, (sd_rd32(s, HDA_SD_CTL) & 0x00FFFFFF) | HDA_SD_CTL_RUN);
     s->running = true;
@@ -826,7 +831,9 @@ static void hda_stream_update(HdaStream *s)
 {
     if (!s || !s->running)
         return;
-    uint32_t lpib = sd_rd32(s, HDA_SD_LPIB);
+    uint32_t lpib = s->dpos ? *s->dpos : HDA_BUF_SIZE;
+    if (lpib >= HDA_BUF_SIZE)
+        lpib = sd_rd32(s, HDA_SD_LPIB);
     if (lpib >= HDA_BUF_SIZE)
         return;
     s->pos += (lpib + HDA_BUF_SIZE - s->last_lpib) % HDA_BUF_SIZE;
@@ -1421,6 +1428,15 @@ static bool hda_init_controller(const PciDevice *dev)
     {
         kprintf("hda: failed to allocate command rings\n");
         return false;
+    }
+
+    uint8_t *dpos = hda_dma_alloc(c, 1);
+    if (dpos)
+    {
+        uint64_t phys = virt_to_phys(dpos);
+        c->dpos = (volatile uint32_t *)dpos;
+        hda_wr32(c, HDA_REG_DPUBASE, (uint32_t)(phys >> 32));
+        hda_wr32(c, HDA_REG_DPLBASE, (uint32_t)phys | 1);
     }
 
     uint16_t codecs = hda_rd16(c, HDA_REG_STATESTS);

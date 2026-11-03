@@ -154,6 +154,11 @@ static struct
     uint64_t last_pli;
     uint8_t *dec_buf;
     bool     shown_video;
+    uint64_t watch_at;
+    uint32_t video_packets;
+    uint32_t foreign_packets;
+    int      foreign_pt;
+    bool     watch_notice;
 }
 V;
 
@@ -180,7 +185,10 @@ static void ctl_send(const char *fmt, ...)
 static void quit(const char *why)
 {
     if (why)
+    {
+        printf("discord-voice: %s\n", why);
         ctl_send("error %s", why);
+    }
     exit(0);
 }
 
@@ -835,7 +843,18 @@ static void handle_udp_packet(uint8_t *p, size_t n)
         return;
     uint8_t pt = p[1] & 0x7F;
     uint32_t pkt_ssrc = get32(p + 8);
+    if (V.watch_user && pt != VIDEO_PT && (is_video_ssrc(pkt_ssrc) || (pt != 0x78 && pt < 200)))
+    {
+        if (pt != VIDEO_RTX_PT)
+        {
+            V.foreign_packets++;
+            V.foreign_pt = pt;
+        }
+        return;
+    }
     bool video = V.watch_user && (is_video_ssrc(pkt_ssrc) || (pt == VIDEO_PT && !speaker_for_ssrc(pkt_ssrc)));
+    if (video)
+        V.video_packets++;
     if (pt != 0x78 && !video)
         return;
 
@@ -987,14 +1006,8 @@ static void on_session(Json *d)
     }
     if (V.watch_user)
     {
-        const char *codec = json_str(d, "video_codec");
-        if (codec && strcmp(codec, "VP8") != 0)
-        {
-            char msg[160];
-            snprintf(msg, sizeof(msg), "This stream uses %s video, which StrawOS can't play yet.", codec);
-            quit(msg);
-        }
         send_json("{\"op\":15,\"d\":{\"any\":100}}");
+        V.watch_at = uptime_ms();
         if (V.win)
             watch_status(V.win, "Waiting for video...");
     }
@@ -1049,16 +1062,6 @@ static void handle_json(const char *text, size_t len)
             }
             break;
         case 14:
-            if (V.watch_user)
-            {
-                const char *codec = json_str(d, "video_codec");
-                if (codec && strcmp(codec, "VP8") != 0)
-                {
-                    char msg[160];
-                    snprintf(msg, sizeof(msg), "This stream uses %s video, which StrawOS can't play yet.", codec);
-                    quit(msg);
-                }
-            }
             break;
         case 8:
             V.hb_interval = (uint64_t)json_int(d, "heartbeat_interval", 13750);
@@ -1334,6 +1337,33 @@ static void tick(void)
             ctl_send("speaking %llu 0", (unsigned long long)s->user);
         }
     }
+    if (V.watch_user && V.win && V.watch_at && !V.shown_video && !V.watch_notice)
+    {
+        const char *msg = NULL;
+        char buf[200];
+        if (V.foreign_packets > 30 && V.video_packets == 0)
+        {
+            const char *name = V.foreign_pt == 101 || V.foreign_pt == 102 ? "H.264"
+                             : V.foreign_pt == 103 || V.foreign_pt == 104 ? "H.265"
+                             : V.foreign_pt == 107 || V.foreign_pt == 108 ? "VP9"
+                             : V.foreign_pt == 109 || V.foreign_pt == 110 ? "AV1" : NULL;
+            if (name)
+                snprintf(buf, sizeof(buf), "This stream is sent as %s, which StrawOS can't play yet.", name);
+            else
+                snprintf(buf, sizeof(buf), "This stream uses a video format StrawOS can't play yet (type %d).",
+                         V.foreign_pt);
+            msg = buf;
+        }
+        else if (now - V.watch_at > 10000)
+            msg = V.video_packets ? "Video is arriving but could not be decoded." : "No video is arriving from the stream.";
+        if (msg)
+        {
+            V.watch_notice = true;
+            printf("discord-voice: %s (vp8 packets %u, other %u, last type %d)\n", msg, V.video_packets,
+                   V.foreign_packets, V.foreign_pt);
+            watch_status(V.win, msg);
+        }
+    }
     uint64_t epoch = dave_ready(V.dave) ? dave_epoch(V.dave) : 0;
     if (epoch != V.shown_epoch)
     {
@@ -1427,11 +1457,22 @@ int main(int argc, char **argv)
         n += ws_pollfd(V.ws, &fds[n]);
         if (V.udp >= 0)
             fds[n++] = (struct pollfd){ V.udp, POLLIN, 0 };
-        if (V.mic >= 0)
-            fds[n++] = (struct pollfd){ V.mic, POLLIN, 0 };
         if (V.win)
             fds[n++] = (struct pollfd){ sx_fd(), POLLIN, 0 };
         int64_t timeout = ws_has_buffered(V.ws) ? 0 : 20;
+        if (V.mic >= 0)
+        {
+            struct audio_state st;
+            if (ioctl(V.mic, AUDIO_GET_STATE, &st) == 0)
+            {
+                int64_t missing = st.capture_avail >= FRAME_BYTES ? 0 : FRAME_BYTES - (int64_t)st.capture_avail;
+                int64_t until = missing * 1000 / (AUDIO_RATE * AUDIO_FRAME) + 1;
+                if (missing == 0)
+                    until = 0;
+                if (until < timeout)
+                    timeout = until;
+            }
+        }
         if (V.video_on)
         {
             uint64_t now = uptime_ms();
