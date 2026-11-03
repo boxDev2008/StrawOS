@@ -447,6 +447,10 @@ void        vc_on_stream_event(const char *t, Json *d);
 StreamState vc_stream_state(void);
 int         vc_stream_viewers(void);
 const char *vc_stream_error(void);
+void        vc_watch(Snowflake user);
+void        vc_watch_stop(void);
+Snowflake   vc_watching(void);
+StreamState vc_watch_state(void);
 
 extern char api_base[256];
 extern char gateway_url[256];

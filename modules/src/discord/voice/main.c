@@ -11,6 +11,9 @@
 #include "dave.h"
 #include "mls.h"
 #include "screen.h"
+#include "vp8dec.h"
+#include "watch.h"
+#include <strawx.h>
 
 #define FRAME_SAMPLES   960
 #define FRAME_BYTES     (FRAME_SAMPLES * AUDIO_FRAME)
@@ -41,6 +44,8 @@
 #define Q_START         30
 #define Q_MIN           12
 #define Q_MAX           100
+#define RX_MAX_FRAME    (4 << 20)
+#define PLI_MIN_MS      300
 
 typedef struct
 {
@@ -131,6 +136,24 @@ static struct
     uint64_t next_sr;
     uint8_t *frame_buf;
     uint8_t *dave_buf;
+
+    uint64_t watch_user;
+    char     watch_title[128];
+    Watch   *win;
+    Vp8Dec  *dec;
+    uint32_t vssrc[8];
+    int      n_vssrc;
+    uint8_t *rx_buf;
+    size_t   rx_len;
+    uint32_t rx_ts;
+    uint16_t rx_next;
+    bool     rx_active;
+    bool     have_vseq;
+    uint16_t last_vseq;
+    bool     need_key;
+    uint64_t last_pli;
+    uint8_t *dec_buf;
+    bool     shown_video;
 }
 V;
 
@@ -216,7 +239,7 @@ static void send_identify(void)
         buf_json_string(&b, V.session);
         buf_puts(&b, ",\"token\":");
         buf_json_string(&b, V.token);
-        if (V.stream)
+        if (V.stream || V.watch_user)
             buf_puts(&b, ",\"video\":true,\"streams\":[{\"type\":\"screen\",\"rid\":\"100\",\"quality\":100}]");
         buf_printf(&b, ",\"max_dave_protocol_version\":%d}}", DAVE_MAX_PROTOCOL);
     }
@@ -532,6 +555,138 @@ static void start_video(void)
     ctl_send("video %dx%d", w, h);
 }
 
+static bool is_video_ssrc(uint32_t ssrc)
+{
+    for (int i = 0; i < V.n_vssrc; i++)
+        if (V.vssrc[i] == ssrc)
+            return true;
+    return false;
+}
+
+static void add_video_ssrc(uint32_t ssrc)
+{
+    if (ssrc && !is_video_ssrc(ssrc) && V.n_vssrc < 8)
+        V.vssrc[V.n_vssrc++] = ssrc;
+}
+
+static void send_pli(uint32_t media_ssrc)
+{
+    uint64_t now = uptime_ms();
+    if (!V.have_key || V.udp < 0 || now - V.last_pli < PLI_MIN_MS)
+        return;
+    V.last_pli = now;
+    uint8_t pkt[12 + 20];
+    pkt[0] = 0x81;
+    pkt[1] = 206;
+    put16(pkt + 2, 2);
+    put32(pkt + 4, V.ssrc);
+    put32(pkt + 8, media_ssrc);
+    uint32_t nonce = V.tx_nonce++;
+    uint8_t iv[12] = { 0 }, tag[16];
+    put32(iv, nonce);
+    mls_aes_gcm(true, V.key, 32, iv, 12, pkt, 8, pkt + 8, 4, tag);
+    memcpy(pkt + 12, tag, 16);
+    put32(pkt + 28, nonce);
+    write(V.udp, pkt, sizeof(pkt));
+}
+
+static void video_lost(uint32_t ssrc)
+{
+    V.rx_active = false;
+    V.need_key = true;
+    send_pli(ssrc);
+}
+
+static void video_frame_done(uint32_t ssrc)
+{
+    size_t out_len;
+    if (!dave_decrypt(V.dave, V.watch_user, V.rx_buf, V.rx_len, V.dec_buf, &out_len))
+    {
+        video_lost(ssrc);
+        return;
+    }
+    if (V.need_key && !vp8dec_is_keyframe(V.dec_buf, out_len))
+    {
+        send_pli(ssrc);
+        return;
+    }
+    int r = vp8dec_decode(V.dec, V.dec_buf, out_len);
+    if (r < 0)
+    {
+        video_lost(ssrc);
+        return;
+    }
+    V.need_key = false;
+    Vp8Image img;
+    if (r == 1 && V.win && vp8dec_image(V.dec, &img))
+    {
+        watch_frame(V.win, &img);
+        if (!V.shown_video)
+        {
+            V.shown_video = true;
+            ctl_send("video %dx%d", img.width, img.height);
+        }
+    }
+}
+
+static void video_packet(uint32_t ssrc, uint16_t seq, uint32_t ts, bool marker, const uint8_t *p, size_t n)
+{
+    if (!V.dec || n < 1)
+        return;
+    bool gap = V.have_vseq && seq != (uint16_t)(V.last_vseq + 1);
+    if (V.have_vseq && (uint16_t)(seq - V.last_vseq) > 0x8000)
+        return;
+    V.have_vseq = true;
+    V.last_vseq = seq;
+
+    size_t i = 1;
+    bool start = (p[0] & 0x10) && (p[0] & 0x07) == 0;
+    if (p[0] & 0x80)
+    {
+        if (n < 2)
+            return;
+        uint8_t x = p[1];
+        i = 2;
+        if (x & 0x80)
+            i += (i < n && (p[i] & 0x80)) ? 2 : 1;
+        if (x & 0x40)
+            i++;
+        if (x & 0x30)
+            i++;
+    }
+    if (i > n)
+        return;
+    p += i;
+    n -= i;
+
+    if (start)
+    {
+        if (gap || V.rx_active)
+            video_lost(ssrc);
+        V.rx_active = true;
+        V.rx_len = 0;
+        V.rx_ts = ts;
+    }
+    else if (!V.rx_active || gap || ts != V.rx_ts)
+    {
+        if (gap || V.rx_active)
+            video_lost(ssrc);
+        return;
+    }
+    if (V.rx_len + n > RX_MAX_FRAME)
+    {
+        video_lost(ssrc);
+        return;
+    }
+    memcpy(V.rx_buf + V.rx_len, p, n);
+    V.rx_len += n;
+    if (marker)
+    {
+        V.rx_active = false;
+        video_frame_done(ssrc);
+    }
+}
+
 static Speaker *speaker_for_ssrc(uint32_t ssrc)
 {
     for (int i = 0; i < V.n_speakers; i++)
@@ -656,11 +811,11 @@ static void handle_udp_packet(uint8_t *p, size_t n)
             V.discovered = true;
             Buf b = { 0 };
             buf_puts(&b, "{\"op\":1,\"d\":{\"protocol\":\"udp\",");
-            if (V.stream)
+            if (V.stream || V.watch_user)
                 buf_printf(&b, "\"codecs\":[{\"name\":\"opus\",\"type\":\"audio\",\"priority\":1000,\"payload_type\":120},"
                                "{\"name\":\"VP8\",\"type\":\"video\",\"priority\":1000,\"payload_type\":%d,"
-                               "\"rtx_payload_type\":%d,\"encode\":true,\"decode\":true}],",
-                           VIDEO_PT, VIDEO_RTX_PT);
+                               "\"rtx_payload_type\":%d,\"encode\":%s,\"decode\":true}],",
+                           VIDEO_PT, VIDEO_RTX_PT, V.stream ? "true" : "false");
             buf_puts(&b, "\"data\":{\"address\":");
             buf_json_string(&b, ip);
             buf_printf(&b, ",\"port\":%d,\"mode\":\"%s\"}}}", port, MODE);
@@ -679,7 +834,9 @@ static void handle_udp_packet(uint8_t *p, size_t n)
     if (V.stream)
         return;
     uint8_t pt = p[1] & 0x7F;
-    if (pt != 0x78)
+    uint32_t pkt_ssrc = get32(p + 8);
+    bool video = V.watch_user && (is_video_ssrc(pkt_ssrc) || (pt == VIDEO_PT && !speaker_for_ssrc(pkt_ssrc)));
+    if (pt != 0x78 && !video)
         return;
 
     size_t hdr = 12 + 4 * (size_t)(p[0] & 0x0F);
@@ -702,6 +859,19 @@ static void handle_udp_packet(uint8_t *p, size_t n)
         return;
     uint8_t *frame = p + hdr + ext_words * 4;
     size_t frame_len = ct_len - ext_words * 4;
+    if ((p[0] & 0x20) && frame_len > 0)
+    {
+        size_t pad = frame[frame_len - 1];
+        if (pad > frame_len)
+            return;
+        frame_len -= pad;
+    }
+    if (video)
+    {
+        add_video_ssrc(pkt_ssrc);
+        video_packet(pkt_ssrc, (uint16_t)(p[2] << 8 | p[3]), get32(p + 4), (p[1] & 0x80) != 0, frame, frame_len);
+        return;
+    }
 
     uint32_t ssrc = get32(p + 8);
     uint16_t seq = (uint16_t)(p[2] << 8 | p[3]);
@@ -815,6 +985,19 @@ static void on_session(Json *d)
             printf("discord-voice: server picked video codec %s\n", codec);
         start_video();
     }
+    if (V.watch_user)
+    {
+        const char *codec = json_str(d, "video_codec");
+        if (codec && strcmp(codec, "VP8") != 0)
+        {
+            char msg[160];
+            snprintf(msg, sizeof(msg), "This stream uses %s video, which StrawOS can't play yet.", codec);
+            quit(msg);
+        }
+        send_json("{\"op\":15,\"d\":{\"any\":100}}");
+        if (V.win)
+            watch_status(V.win, "Waiting for video...");
+    }
     open_mic();
 }
 
@@ -849,6 +1032,34 @@ static void handle_json(const char *text, size_t len)
                 speaker_set(ssrc, user);
             break;
         }
+        case 12:
+            if (V.watch_user)
+            {
+                uint64_t user = json_id(d, "user_id");
+                uint32_t audio = (uint32_t)json_int(d, "audio_ssrc", 0);
+                if (user && audio)
+                    speaker_set(audio, user);
+                if (!user || user == V.watch_user)
+                {
+                    add_video_ssrc((uint32_t)json_int(d, "video_ssrc", 0));
+                    Json *streams = json_get(d, "streams");
+                    for (Json *s = streams ? streams->child : NULL; s; s = s->next)
+                        add_video_ssrc((uint32_t)json_int(s, "ssrc", 0));
+                }
+            }
+            break;
+        case 14:
+            if (V.watch_user)
+            {
+                const char *codec = json_str(d, "video_codec");
+                if (codec && strcmp(codec, "VP8") != 0)
+                {
+                    char msg[160];
+                    snprintf(msg, sizeof(msg), "This stream uses %s video, which StrawOS can't play yet.", codec);
+                    quit(msg);
+                }
+            }
+            break;
         case 8:
             V.hb_interval = (uint64_t)json_int(d, "heartbeat_interval", 13750);
             V.next_hb = uptime_ms() + V.hb_interval / 2;
@@ -1164,6 +1375,10 @@ int main(int argc, char **argv)
             V.deafened = atoi(v) != 0;
         else if (!strcmp(k, "--stream"))
             V.stream = atoi(v) != 0;
+        else if (!strcmp(k, "--watch"))
+            V.watch_user = parse_snowflake(v);
+        else if (!strcmp(k, "--title"))
+            snprintf(V.watch_title, sizeof(V.watch_title), "%s", v);
     }
     if (!V.endpoint[0] || !V.server[0] || !V.session[0] || !V.token[0] || !V.user_id || !ctl_name)
         usage();
@@ -1190,6 +1405,17 @@ int main(int argc, char **argv)
     if (!V.dave)
         quit("Could not start end-to-end encryption.");
 
+    if (V.watch_user)
+    {
+        V.dec = vp8dec_new();
+        V.rx_buf = malloc(RX_MAX_FRAME);
+        V.dec_buf = malloc(RX_MAX_FRAME);
+        V.win = watch_open(V.watch_title[0] ? V.watch_title : "Stream");
+        if (!V.dec || !V.rx_buf || !V.dec_buf || !V.win)
+            quit("Could not open the stream window.");
+        V.need_key = true;
+    }
+
     ctl_send("state connecting");
     connect_ws();
 
@@ -1203,6 +1429,8 @@ int main(int argc, char **argv)
             fds[n++] = (struct pollfd){ V.udp, POLLIN, 0 };
         if (V.mic >= 0)
             fds[n++] = (struct pollfd){ V.mic, POLLIN, 0 };
+        if (V.win)
+            fds[n++] = (struct pollfd){ sx_fd(), POLLIN, 0 };
         int64_t timeout = ws_has_buffered(V.ws) ? 0 : 20;
         if (V.video_on)
         {
@@ -1221,6 +1449,11 @@ int main(int argc, char **argv)
         udp_pump();
         mic_pump();
         video_pump();
+        if (V.win && !watch_pump(V.win))
+        {
+            ctl_send("closed");
+            quit(NULL);
+        }
         tick();
     }
 }

@@ -7,7 +7,7 @@
 #define TCP_MAX_RETRIES  10
 #define TCP_CONNECT_MS   15000
 #define TCP_BACKLOG      16
-#define UDP_QUEUE        64
+#define UDP_QUEUE        256
 #define UDP_MAX_DGRAM    1500
 
 #define TCP_FIN 0x01

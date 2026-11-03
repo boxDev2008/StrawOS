@@ -59,7 +59,7 @@
 #define R69_RXDESC_RES      (1u << 21)
 #define R69_DESC_LEN_MASK   0x3FFF
 
-#define R69_NUM_RX_DESC     64
+#define R69_NUM_RX_DESC     256
 #define R69_NUM_TX_DESC     16
 #define R69_BUF_SIZE        2048
 

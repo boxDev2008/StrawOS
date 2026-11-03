@@ -50,6 +50,7 @@ typedef enum
     HIT_VC_DEAF,
     HIT_VC_LEAVE,
     HIT_VC_STREAM,
+    HIT_WATCH,
 }
 HitKind;
 
@@ -840,11 +841,13 @@ static void draw_screen_share(SxCanvas *c, int x, int y, uint32_t color, bool li
     }
 }
 
-static int draw_live_badge(SxCanvas *c, int right, int y)
+static int draw_live_badge(SxCanvas *c, int right, int y, bool watching)
 {
-    int w = font_width(FACE_BOLD, 10, "LIVE", 4) + 8;
-    sx_fill_rounded_rect(c, right - w, y + 6, w, 15, 4, COL_RED);
-    font_draw(c, FACE_BOLD, 10, right - w + 4, y + 17, "LIVE", 4, SX_RGB(0xFF, 0xFF, 0xFF));
+    const char *text = watching ? "WATCHING" : "LIVE";
+    int len = (int)strlen(text);
+    int w = font_width(FACE_BOLD, 10, text, len) + 8;
+    sx_fill_rounded_rect(c, right - w, y + 6, w, 15, 4, watching ? COL_ACCENT : COL_RED);
+    font_draw(c, FACE_BOLD, 10, right - w + 4, y + 17, text, len, SX_RGB(0xFF, 0xFF, 0xFF));
     return w + 4;
 }
 
@@ -879,12 +882,20 @@ static int draw_voice_members(SxCanvas *c, Channel *ch, int x, int y, int w)
         const VoiceState *v = members[i];
         User *u = store_user(v->user_id);
         bool speaking = ours && vc_speaking(v->user_id);
+        bool watchable = v->streaming && ours && v->user_id != S.me.id;
+        SxRect row = sx_rect(x, y, w, VOICE_ROW);
+        if (watchable)
+        {
+            if (hovering(row))
+                sx_fill_rounded_rect(c, row.x - 4, row.y + 1, row.w + 8, row.h - 2, 4, COL_HOVER);
+            add_hit(HIT_WATCH, row, v->user_id);
+        }
         if (speaking)
             sx_draw_circle(c, x + 12, y + 14, 12.5f, 2.0f, COL_GREEN);
         draw_avatar(c, v->user_id, u ? u->avatar : NULL, u ? u->discriminator : NULL, x + 2, y + 4, 20);
         int right = x + w;
         if (v->streaming)
-            right -= draw_live_badge(c, right, y);
+            right -= draw_live_badge(c, right, y, vc_watching() == v->user_id);
         if (v->deafened)
         {
             right -= 20;
@@ -933,6 +944,11 @@ static void draw_voice_panel(SxCanvas *c, int x0, int vy)
         snprintf(sub, sizeof(sub), "%s", vc_error());
     else if (st == VC_CONNECTED && ss == SS_OFF && vc_stream_error()[0])
         snprintf(sub, sizeof(sub), "%s", vc_stream_error());
+    else if (vc_watching())
+    {
+        snprintf(sub, sizeof(sub), "%s %s", vc_watch_state() == SS_LIVE ? "Watching" : "Opening stream of",
+                 display_name(vc_watching()));
+    }
     else if (ss == SS_LIVE)
     {
         int n = vc_stream_viewers();
@@ -1760,6 +1776,9 @@ static void on_click(int x, int y)
                 vc_stream_start();
             else
                 vc_stream_stop();
+            break;
+        case HIT_WATCH:
+            vc_watch(h->id);
             break;
         case HIT_VC_LEAVE:
             vc_leave();

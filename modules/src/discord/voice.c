@@ -53,8 +53,17 @@ static struct
     int       st_viewers;
     char      st_error[160];
     uint64_t  st_at;
+
+    StreamState wt_state;
+    Snowflake wt_user;
+    char      wt_key[128];
+    char      wt_server[32];
+    char      wt_token[192];
+    char      wt_endpoint[256];
+    Helper    wt;
+    uint64_t  wt_at;
 }
-VC = { .voice = { .listener = -1, .conn = -1 }, .st = { .listener = -1, .conn = -1 } };
+VC = { .voice = { .listener = -1, .conn = -1 }, .st = { .listener = -1, .conn = -1 }, .wt = { .listener = -1, .conn = -1 } };
 
 static void changed(void)
 {
@@ -175,8 +184,28 @@ static void stream_end(const char *error)
     changed();
 }
 
+static void watch_end(const char *error)
+{
+    if (VC.wt_state == SS_OFF)
+        return;
+    helper_stop(&VC.wt);
+    if (VC.wt_key[0])
+    {
+        char json[256];
+        snprintf(json, sizeof(json), "{\"op\":19,\"d\":{\"stream_key\":\"%s\"}}", VC.wt_key);
+        gw_send(json);
+    }
+    VC.wt_state = SS_OFF;
+    VC.wt_user = 0;
+    VC.wt_key[0] = VC.wt_server[0] = VC.wt_token[0] = VC.wt_endpoint[0] = '\0';
+    if (error)
+        snprintf(VC.st_error, sizeof(VC.st_error), "%s", error);
+    changed();
+}
+
 static void stop_helper(void)
 {
+    watch_end(NULL);
     helper_stop(&VC.voice);
     VC.n_speaking = 0;
     VC.encrypted = false;
@@ -253,6 +282,9 @@ void vc_leave(void)
 
 void vc_reset(void)
 {
+    helper_stop(&VC.wt);
+    VC.wt_state = SS_OFF;
+    VC.wt_key[0] = '\0';
     helper_stop(&VC.st);
     VC.st_state = SS_OFF;
     VC.st_key[0] = '\0';
@@ -272,6 +304,7 @@ void vc_set_mute(bool muted)
     helper_write(&VC.voice, line);
     snprintf(line, sizeof(line), "deaf %d\n", VC.deafened);
     helper_write(&VC.voice, line);
+    helper_write(&VC.wt, line);
     if (VC.state == VC_CONNECTED || VC.state == VC_CONNECTING)
         send_voice_state(VC.guild, VC.channel);
     changed();
@@ -283,6 +316,7 @@ void vc_set_deaf(bool deafened)
     char line[16];
     snprintf(line, sizeof(line), "deaf %d\n", VC.deafened);
     helper_write(&VC.voice, line);
+    helper_write(&VC.wt, line);
     if (VC.state == VC_CONNECTED || VC.state == VC_CONNECTING)
         send_voice_state(VC.guild, VC.channel);
     changed();
@@ -310,6 +344,7 @@ void vc_on_state_update(Json *d)
     if (channel != VC.channel)
     {
         stream_end(NULL);
+        watch_end(NULL);
         VC.channel = channel;
         changed();
     }
@@ -394,6 +429,92 @@ void vc_stream_stop(void)
     stream_end(NULL);
 }
 
+static void watch_maybe_start(void)
+{
+    if (VC.wt_state != SS_STARTING || VC.wt.pid || !VC.wt_server[0] || !VC.wt_token[0] || !VC.wt_endpoint[0] ||
+        !VC.session[0])
+        return;
+    char user[32], channel[32], watched[32], deaf[4], title[96];
+    snprintf(user, sizeof(user), "%llu", (unsigned long long)S.me.id);
+    snprintf(channel, sizeof(channel), "%llu", (unsigned long long)VC.channel);
+    snprintf(watched, sizeof(watched), "%llu", (unsigned long long)VC.wt_user);
+    snprintf(deaf, sizeof(deaf), "%d", VC.deafened);
+    const char *name = store_user_name(VC.wt_user);
+    snprintf(title, sizeof(title), "%s's screen", name ? name : "Stream");
+    const char *argv[] = {
+        HELPER, "--endpoint", VC.wt_endpoint, "--server", VC.wt_server, "--session", VC.session, "--token",
+        VC.wt_token, "--user", user, "--channel", channel, "--ctl", "", "--watch", watched, "--title", title,
+        "--deaf", deaf, NULL,
+    };
+    if (!helper_start(&VC.wt, argv))
+        watch_end("Could not start the stream viewer.");
+}
+
+void vc_watch(Snowflake user)
+{
+    if (VC.state != VC_CONNECTED || !user || user == S.me.id)
+        return;
+    if (VC.wt_state != SS_OFF)
+    {
+        bool same = VC.wt_user == user;
+        watch_end(NULL);
+        if (same)
+            return;
+    }
+    if (VC.guild)
+        snprintf(VC.wt_key, sizeof(VC.wt_key), "guild:%llu:%llu:%llu", (unsigned long long)VC.guild,
+                 (unsigned long long)VC.channel, (unsigned long long)user);
+    else
+        snprintf(VC.wt_key, sizeof(VC.wt_key), "call:%llu:%llu", (unsigned long long)VC.channel,
+                 (unsigned long long)user);
+    char json[256];
+    snprintf(json, sizeof(json), "{\"op\":20,\"d\":{\"stream_key\":\"%s\"}}", VC.wt_key);
+    gw_send(json);
+    VC.wt_state = SS_STARTING;
+    VC.wt_user = user;
+    VC.wt_server[0] = VC.wt_token[0] = VC.wt_endpoint[0] = VC.st_error[0] = '\0';
+    VC.wt_at = uptime_ms();
+    changed();
+}
+
+void vc_watch_stop(void)
+{
+    watch_end(NULL);
+}
+
+static void watch_event(const char *t, Json *d)
+{
+    if (strcmp(t, "STREAM_CREATE") == 0)
+    {
+        const char *server = json_str(d, "rtc_server_id");
+        if (server)
+            snprintf(VC.wt_server, sizeof(VC.wt_server), "%s", server);
+        watch_maybe_start();
+    }
+    else if (strcmp(t, "STREAM_SERVER_UPDATE") == 0)
+    {
+        const char *token = json_str(d, "token"), *endpoint = json_str(d, "endpoint");
+        if (!token || !endpoint)
+            return;
+        snprintf(VC.wt_token, sizeof(VC.wt_token), "%s", token);
+        snprintf(VC.wt_endpoint, sizeof(VC.wt_endpoint), "%s", endpoint);
+        if (VC.wt.pid)
+        {
+            helper_stop(&VC.wt);
+            VC.wt_state = SS_STARTING;
+            VC.wt_at = uptime_ms();
+        }
+        watch_maybe_start();
+    }
+    else if (strcmp(t, "STREAM_DELETE") == 0)
+    {
+        const char *reason = json_str(d, "reason");
+        VC.wt_key[0] = '\0';
+        watch_end(reason && strcmp(reason, "user_requested") == 0 ? NULL : "The stream ended.");
+    }
+    changed();
+}
+
 static int count_ids(Json *a)
 {
     int n = 0;
@@ -416,6 +537,11 @@ static const char *stream_reason(const char *reason)
 void vc_on_stream_event(const char *t, Json *d)
 {
     const char *key = json_str(d, "stream_key");
+    if (VC.wt_state != SS_OFF && key && strcmp(key, VC.wt_key) == 0)
+    {
+        watch_event(t, d);
+        return;
+    }
     if (VC.st_state == SS_OFF || !key || strcmp(key, VC.st_key) != 0)
         return;
     if (strcmp(t, "STREAM_CREATE") == 0)
@@ -522,6 +648,19 @@ static void stream_line(char *line)
     }
 }
 
+static void watch_line(char *line)
+{
+    if (strncmp(line, "video ", 6) == 0)
+    {
+        VC.wt_state = SS_LIVE;
+        changed();
+    }
+    else if (strncmp(line, "error ", 6) == 0)
+        watch_end(line + 6);
+    else if (strcmp(line, "closed") == 0)
+        watch_end(NULL);
+}
+
 void vc_step(void)
 {
     if (VC.state == VC_JOINING && uptime_ms() - VC.join_at > JOIN_TIMEOUT)
@@ -539,12 +678,17 @@ void vc_step(void)
     }
     if (!helper_step(&VC.st, stream_line) && VC.st_state != SS_OFF)
         stream_end("The stream connection ended.");
+    if (VC.wt_state == SS_STARTING && !VC.wt.pid && uptime_ms() - VC.wt_at > STREAM_TIMEOUT)
+        watch_end("Discord did not send the stream.");
+    if (!helper_step(&VC.wt, watch_line) && VC.wt_state != SS_OFF)
+        watch_end("The stream connection ended.");
 }
 
 int vc_pollfds(struct pollfd *fds, int max)
 {
     int n = helper_pollfds(&VC.voice, fds, max);
-    return n + helper_pollfds(&VC.st, fds + n, max - n);
+    n += helper_pollfds(&VC.st, fds + n, max - n);
+    return n + helper_pollfds(&VC.wt, fds + n, max - n);
 }
 
 VcState vc_state(void) { return VC.state; }
@@ -556,6 +700,8 @@ const char *vc_error(void) { return VC.error; }
 StreamState vc_stream_state(void) { return VC.st_state; }
 int vc_stream_viewers(void) { return VC.st_viewers; }
 const char *vc_stream_error(void) { return VC.st_error; }
+Snowflake vc_watching(void) { return VC.wt_state != SS_OFF ? VC.wt_user : 0; }
+StreamState vc_watch_state(void) { return VC.wt_state; }
 
 bool vc_speaking(Snowflake user)
 {
