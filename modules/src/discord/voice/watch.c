@@ -5,7 +5,9 @@
 
 #include "watch.h"
 
-#define BG SX_RGB(0x11, 0x12, 0x14)
+#include <ui.h>
+
+#define BG sx_darken(sx_theme->bg, 60)
 
 struct Watch
 {
@@ -29,7 +31,7 @@ static void draw(Watch *w)
     sx_fill_rect(c, 0, 0, cw, ch, BG);
     if (!w->frame)
     {
-        sx_draw_text_centered(c, &sx_font_sans, sx_rect(0, 0, cw, ch), w->status, SX_RGB(0xB5, 0xBA, 0xC1));
+        sx_draw_text_centered(c, &sx_font_sans, sx_rect(0, 0, cw, ch), w->status, sx_theme->text_dim);
         sx_window_commit(w->win);
         return;
     }

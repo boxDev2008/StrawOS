@@ -462,32 +462,57 @@ bool api_request(const char *method, const char *path, const char *json, HttpDon
 
 typedef struct RichLayout RichLayout;
 
-RichLayout *rich_layout(const char *text, int width, Snowflake guild_id, uint32_t base_color);
+RichLayout *rich_layout(const char *text, int width, Snowflake guild_id);
 int         rich_height(const RichLayout *l);
-void        rich_draw(SxCanvas *c, const RichLayout *l, int x, int y);
+void        rich_draw(SxCanvas *c, const RichLayout *l, int x, int y, uint32_t color);
 void        rich_free(RichLayout *l);
+typedef void (*RichLinkFn)(SxRect r, const char *url, int len, void *user);
+void        rich_links(const RichLayout *l, int x, int y, RichLinkFn fn, void *user);
 
 #define UI_TEXT_PX   15
 #define UI_SMALL_PX  12
 #define UI_NAME_PX   15
 
-#define COL_GUILDBAR    SX_RGB(0x1E, 0x1F, 0x22)
-#define COL_SIDEBAR     SX_RGB(0x2B, 0x2D, 0x31)
-#define COL_MAIN        SX_RGB(0x31, 0x33, 0x38)
-#define COL_INPUT       SX_RGB(0x38, 0x3A, 0x40)
-#define COL_PANEL       SX_RGB(0x23, 0x24, 0x28)
-#define COL_HOVER       SX_RGB(0x35, 0x37, 0x3C)
-#define COL_SELECTED    SX_RGB(0x40, 0x42, 0x49)
-#define COL_TEXT        SX_RGB(0xDB, 0xDE, 0xE1)
-#define COL_HEADER      SX_RGB(0xF2, 0xF3, 0xF5)
-#define COL_MUTED       SX_RGB(0x94, 0x9B, 0xA4)
-#define COL_FAINT       SX_RGB(0x6D, 0x6F, 0x78)
-#define COL_ACCENT      SX_RGB(0x58, 0x65, 0xF2)
-#define COL_ACCENT_HI   SX_RGB(0x47, 0x52, 0xC4)
-#define COL_LINK        SX_RGB(0x00, 0xA8, 0xFC)
-#define COL_MENTION_BG  SX_RGB(0x3C, 0x42, 0x70)
-#define COL_MENTION     SX_RGB(0xC9, 0xCD, 0xFB)
-#define COL_CODE_BG     SX_RGB(0x2B, 0x2D, 0x31)
-#define COL_DIVIDER     SX_RGB(0x1F, 0x20, 0x23)
-#define COL_RED         SX_RGB(0xF2, 0x3F, 0x43)
-#define COL_GREEN       SX_RGB(0x23, 0xA5, 0x59)
+typedef struct
+{
+    const void *src;
+    uint32_t guildbar, sidebar, main, input, panel, hover, selected, msg_hover, divider, shadow;
+    uint32_t text, header, muted, faint;
+    uint32_t accent, accent_hi, on_accent, link, mention_bg, mention, code_bg, quote, embed;
+    uint32_t red, red_hi, green, yellow, tooltip;
+}
+Palette;
+
+extern Palette pal;
+bool pal_refresh(void);
+
+#define COL_GUILDBAR    (pal.guildbar)
+#define COL_SIDEBAR     (pal.sidebar)
+#define COL_MAIN        (pal.main)
+#define COL_INPUT       (pal.input)
+#define COL_PANEL       (pal.panel)
+#define COL_HOVER       (pal.hover)
+#define COL_SELECTED    (pal.selected)
+#define COL_MSG_HOVER   (pal.msg_hover)
+#define COL_DIVIDER     (pal.divider)
+#define COL_SHADOW      (pal.shadow)
+#define COL_TEXT        (pal.text)
+#define COL_HEADER      (pal.header)
+#define COL_MUTED       (pal.muted)
+#define COL_FAINT       (pal.faint)
+#define COL_ACCENT      (pal.accent)
+#define COL_ACCENT_HI   (pal.accent_hi)
+#define COL_ON_ACCENT   (pal.on_accent)
+#define COL_LINK        (pal.link)
+#define COL_MENTION_BG  (pal.mention_bg)
+#define COL_MENTION     (pal.mention)
+#define COL_CODE_BG     (pal.code_bg)
+#define COL_QUOTE       (pal.quote)
+#define COL_EMBED       (pal.embed)
+#define COL_RED         (pal.red)
+#define COL_RED_HI      (pal.red_hi)
+#define COL_GREEN       (pal.green)
+#define COL_YELLOW      (pal.yellow)
+#define COL_TOOLTIP     (pal.tooltip)
+
+#include "icons.h"

@@ -31,6 +31,8 @@ typedef struct
     int      line;
     int      width;
     uint16_t style;
+    int      span_start;
+    int      span_len;
 }
 Piece;
 
@@ -42,7 +44,6 @@ struct RichLayout
     int       lines;
     int       line_h;
     int       width;
-    uint32_t  color;
     bool     *block_lines;
     bool     *quote_lines;
 };
@@ -310,7 +311,7 @@ static int px_for(uint16_t style)
     return style & (ST_CODE | ST_BLOCK) ? UI_TEXT_PX - 1 : UI_TEXT_PX;
 }
 
-static void add_piece(RichLayout *l, int *cap, int start, int len, int x, int line, int width, uint16_t style)
+static void add_piece(RichLayout *l, int *cap, int start, int len, int x, int line, int width, const Span *sp)
 {
     if (l->count == *cap)
     {
@@ -321,7 +322,7 @@ static void add_piece(RichLayout *l, int *cap, int start, int len, int x, int li
         l->pieces = p;
         *cap = n;
     }
-    l->pieces[l->count++] = (Piece){ start, len, x, line, width, style };
+    l->pieces[l->count++] = (Piece){ start, len, x, line, width, sp->style, sp->start, sp->len };
 }
 
 static void mark_line(bool **arr, int *cap, int line)
@@ -339,12 +340,11 @@ static void mark_line(bool **arr, int *cap, int line)
     (*arr)[line] = true;
 }
 
-RichLayout *rich_layout(const char *text, int width, Snowflake guild_id, uint32_t base_color)
+RichLayout *rich_layout(const char *text, int width, Snowflake guild_id)
 {
     RichLayout *l = calloc(1, sizeof(RichLayout));
     if (!l)
         return NULL;
-    l->color = base_color;
     l->width = width;
     l->line_h = font_line_height(FACE_REGULAR, UI_TEXT_PX);
     Builder b = { 0 };
@@ -417,7 +417,7 @@ RichLayout *rich_layout(const char *text, int width, Snowflake guild_id, uint32_
                 if (fit <= 0)
                     fit = 1;
                 int fw = font_width(face, px, s + i, fit);
-                add_piece(l, &cap, sp->start + i, fit, indent + x, line, fw, sp->style);
+                add_piece(l, &cap, sp->start + i, fit, indent + x, line, fw, sp);
                 i += fit;
                 line++;
                 x = 0;
@@ -427,7 +427,7 @@ RichLayout *rich_layout(const char *text, int width, Snowflake guild_id, uint32_
                     mark_line(&l->quote_lines, &quote_cap, line);
                 w = font_width(face, px, s + i, j - i);
             }
-            add_piece(l, &cap, sp->start + i, j - i, indent + x, line, w, sp->style);
+            add_piece(l, &cap, sp->start + i, j - i, indent + x, line, w, sp);
             x += w;
             i = j;
             any = true;
@@ -474,7 +474,7 @@ int rich_height(const RichLayout *l)
     return l ? l->lines * l->line_h : 0;
 }
 
-void rich_draw(SxCanvas *c, const RichLayout *l, int x, int y)
+void rich_draw(SxCanvas *c, const RichLayout *l, int x, int y, uint32_t base)
 {
     if (!l)
         return;
@@ -488,7 +488,7 @@ void rich_draw(SxCanvas *c, const RichLayout *l, int x, int y)
         if (l->block_lines && l->block_lines[line])
             sx_fill_rect(c, x, ly, l->width, lh, COL_CODE_BG);
         if (l->quote_lines && l->quote_lines[line])
-            sx_fill_rect(c, x, ly, 4, lh, SX_RGB(0x4E, 0x50, 0x58));
+            sx_fill_rect(c, x, ly, 4, lh, COL_QUOTE);
     }
     int asc = font_ascent(FACE_REGULAR, UI_TEXT_PX);
     for (int i = 0; i < l->count; i++)
@@ -498,7 +498,7 @@ void rich_draw(SxCanvas *c, const RichLayout *l, int x, int y)
         if (py > clip.y + clip.h || py + lh < clip.y)
             continue;
         int px = x + p->x;
-        uint32_t color = l->color;
+        uint32_t color = base;
         if (p->style & ST_LINK)
             color = COL_LINK;
         if (p->style & ST_MENTION)
@@ -529,4 +529,18 @@ void rich_free(RichLayout *l)
     free(l->block_lines);
     free(l->quote_lines);
     free(l);
+}
+
+void rich_links(const RichLayout *l, int x, int y, RichLinkFn fn, void *user)
+{
+    if (!l)
+        return;
+    for (int i = 0; i < l->count; i++)
+    {
+        const Piece *p = &l->pieces[i];
+        if (!(p->style & ST_LINK))
+            continue;
+        SxRect r = sx_rect(x + p->x - 1, y + p->line * l->line_h, p->width + 2, l->line_h);
+        fn(r, l->text + p->span_start, p->span_len, user);
+    }
 }

@@ -9,18 +9,23 @@
 
 #define TOKEN_DIR   "/config/discord"
 #define TOKEN_PATH  "/config/discord/token"
+#define BROWSER     "/bin/netsurf.elf"
+#define SAVE_DIR    "/pictures/discord"
 
 #define GUILD_W     72
 #define SIDEBAR_W   240
 #define HEADER_H    48
 #define USER_H      52
 #define VOICE_H     98
+#define DAY_H       36
 #define VOICE_ROW   28
 #define INPUT_H     44
 #define INPUT_GAP   24
 #define AVATAR      40
 #define GUTTER      72
 #define MAX_HITS    1024
+#define POOL_SIZE   65536
+#define MAX_MEDIA   128
 
 typedef enum
 {
@@ -51,8 +56,46 @@ typedef enum
     HIT_VC_LEAVE,
     HIT_VC_STREAM,
     HIT_WATCH,
+    HIT_LINK,
+    HIT_IMAGE,
+    HIT_VIEW_BG,
+    HIT_VIEW_IMG,
+    HIT_VIEW_CLOSE,
+    HIT_VIEW_SAVE,
+    HIT_VIEW_OPEN,
 }
 HitKind;
+
+typedef struct
+{
+    int  url;
+    int  proxy;
+    int  name;
+    int  ctype;
+    int  w, h;
+    long size;
+}
+MediaRef;
+
+typedef struct
+{
+    bool  open;
+    char *url;
+    char *proxy;
+    char *name;
+    char *ctype;
+    int   w, h;
+    long  size;
+}
+Viewer;
+
+typedef enum
+{
+    TIP_RIGHT,
+    TIP_ABOVE,
+    TIP_BELOW,
+}
+TipSide;
 
 typedef struct
 {
@@ -105,12 +148,23 @@ static struct
     int         hit_count;
     int         hover_x, hover_y;
 
+    char        pool[POOL_SIZE];
+    int         pool_len;
+    MediaRef    media[MAX_MEDIA];
+    int         media_count;
+    Viewer      view;
+
+    char        tip[128];
+    SxRect      tip_r;
+    TipSide     tip_side;
+
     QrCode      qr;
     char        qr_for[160];
     bool        ra_start_pending;
 
     char        login_error[192];
     char        status[192];
+    bool        status_ok;
     uint64_t    status_at;
 
     bool        caret_on;
@@ -122,8 +176,15 @@ U;
 static void set_status(const char *msg)
 {
     snprintf(U.status, sizeof(U.status), "%s", msg);
+    U.status_ok = false;
     U.status_at = uptime_ms();
     U.dirty = true;
+}
+
+static void set_status_ok(const char *msg)
+{
+    set_status(msg);
+    U.status_ok = true;
 }
 
 static void add_hit(HitKind kind, SxRect r, Snowflake id)
@@ -143,6 +204,26 @@ static Hit *hit_at(int x, int y)
 static bool hovering(SxRect r)
 {
     return sx_rect_contains(r, U.hover_x, U.hover_y);
+}
+
+static int pool_add(const char *s, int len)
+{
+    if (!s)
+        return -1;
+    if (len < 0)
+        len = (int)strlen(s);
+    if (U.pool_len + len + 1 > POOL_SIZE)
+        return -1;
+    int off = U.pool_len;
+    memcpy(U.pool + off, s, (size_t)len);
+    U.pool[off + len] = '\0';
+    U.pool_len += len + 1;
+    return off;
+}
+
+static const char *pool_get(int off)
+{
+    return off >= 0 && off < U.pool_len ? U.pool + off : NULL;
 }
 
 static void field_insert(Field *f, const char *s, int n)
@@ -407,8 +488,11 @@ static void begin_login(const char *token)
     U.dirty = true;
 }
 
+static void viewer_close(void);
+
 static void show_login(const char *error)
 {
+    viewer_close();
     vc_reset();
     gw_stop();
     store_reset();
@@ -681,6 +765,254 @@ static void send_message(void)
     buf_free(&b);
 }
 
+static bool open_url(const char *url)
+{
+    if (!url || (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0))
+        return false;
+    const char *argv[] = { BROWSER, url, NULL };
+    if (!spawn(BROWSER, argv))
+    {
+        set_status("Couldn't start NetSurf.");
+        return false;
+    }
+    set_status_ok("Opened link in NetSurf.");
+    return true;
+}
+
+static void viewer_close(void)
+{
+    free(U.view.url);
+    free(U.view.proxy);
+    free(U.view.name);
+    free(U.view.ctype);
+    memset(&U.view, 0, sizeof(U.view));
+    U.dirty = true;
+}
+
+static void viewer_open(const MediaRef *m)
+{
+    viewer_close();
+    const char *url = pool_get(m->url);
+    const char *proxy = pool_get(m->proxy);
+    if (!url && !proxy)
+        return;
+    U.view.url = xstrdup(url ? url : proxy);
+    U.view.proxy = xstrdup(proxy ? proxy : url);
+    U.view.name = xstrdup(pool_get(m->name) ? pool_get(m->name) : "image");
+    U.view.ctype = xstrdup(pool_get(m->ctype));
+    U.view.w = m->w;
+    U.view.h = m->h;
+    U.view.size = m->size;
+    U.view.open = true;
+    U.dirty = true;
+}
+
+static void save_path(const char *name, char *out, size_t size)
+{
+    char clean[96];
+    int n = 0;
+    for (const char *p = name; *p && n < (int)sizeof(clean) - 1; p++)
+    {
+        char ch = *p;
+        bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '.' ||
+                  ch == '-' || ch == '_';
+        clean[n++] = ok ? ch : '_';
+    }
+    clean[n] = '\0';
+    if (!n || clean[0] == '.')
+        snprintf(clean, sizeof(clean), "image.png");
+    char *dot = strrchr(clean, '.');
+    char ext[24] = "";
+    if (dot && strlen(dot) < sizeof(ext))
+    {
+        snprintf(ext, sizeof(ext), "%s", dot);
+        *dot = '\0';
+    }
+    struct stat st;
+    snprintf(out, size, "%s/%s%s", SAVE_DIR, clean, ext);
+    for (int i = 1; i < 1000 && stat(out, &st) == 0; i++)
+        snprintf(out, size, "%s/%s (%d)%s", SAVE_DIR, clean, i, ext);
+}
+
+typedef struct
+{
+    char path[256];
+}
+SaveCtx;
+
+static void on_saved(int status, const uint8_t *body, size_t len, void *user)
+{
+    SaveCtx *ctx = user;
+    char msg[320];
+    FILE *f = status >= 200 && status < 300 ? fopen(ctx->path, "wb") : NULL;
+    if (f && fwrite(body, 1, len, f) == len)
+    {
+        snprintf(msg, sizeof(msg), "Saved to %s", ctx->path);
+        fclose(f);
+        set_status_ok(msg);
+    }
+    else
+    {
+        if (f)
+        {
+            fclose(f);
+            unlink(ctx->path);
+        }
+        if (status >= 200 && status < 300)
+            snprintf(msg, sizeof(msg), "Couldn't write %s", ctx->path);
+        else
+            snprintf(msg, sizeof(msg), "Download failed (HTTP %d).", status);
+        set_status(msg);
+    }
+    free(ctx);
+}
+
+static void download_view(void)
+{
+    if (!U.view.open)
+        return;
+    SaveCtx *ctx = malloc(sizeof(SaveCtx));
+    if (!ctx)
+        return;
+    mkdir("/pictures", 0755);
+    mkdir(SAVE_DIR, 0755);
+    save_path(U.view.name, ctx->path, sizeof(ctx->path));
+    if (http_request("GET", U.view.url, NULL, NULL, 0, on_saved, ctx))
+        set_status_ok("Downloading...");
+    else
+    {
+        free(ctx);
+        set_status("Couldn't start the download.");
+    }
+}
+
+static void url_basename(const char *url, char *out, size_t size)
+{
+    const char *end = url + strcspn(url, "?#");
+    const char *start = end;
+    while (start > url && start[-1] != '/')
+        start--;
+    int n = (int)(end - start);
+    if (n <= 0)
+        snprintf(out, size, "image.png");
+    else
+        snprintf(out, size, "%.*s", n, start);
+}
+
+static void add_media(SxCanvas *c, SxRect r, const char *url, const char *proxy, const char *name, const char *ctype,
+                      int w, int h, long size)
+{
+    SxRect vis = sx_rect_intersect(r, c->clip);
+    if (sx_rect_empty(vis) || U.media_count >= MAX_MEDIA)
+        return;
+    MediaRef *m = &U.media[U.media_count];
+    m->url = pool_add(url, -1);
+    m->proxy = pool_add(proxy, -1);
+    m->name = pool_add(name, -1);
+    m->ctype = pool_add(ctype, -1);
+    m->w = w;
+    m->h = h;
+    m->size = size;
+    if (m->url < 0 && m->proxy < 0)
+        return;
+    add_hit(HIT_IMAGE, vis, (Snowflake)U.media_count++);
+}
+
+static void link_hit(SxRect r, const char *url, int len, void *user)
+{
+    SxCanvas *c = user;
+    SxRect vis = sx_rect_intersect(r, c->clip);
+    if (sx_rect_empty(vis))
+        return;
+    int off = pool_add(url, len);
+    if (off < 0)
+        return;
+    add_hit(HIT_LINK, vis, (Snowflake)off);
+    if (hovering(vis))
+        sx_fill_rect(c, r.x + 1, r.y + font_ascent(FACE_REGULAR, UI_TEXT_PX) + 3, r.w - 2, 1, COL_LINK);
+}
+
+static void tooltip(SxRect anchor, const char *text, TipSide side)
+{
+    if (!hovering(anchor) || !text)
+        return;
+    snprintf(U.tip, sizeof(U.tip), "%s", text);
+    U.tip_r = anchor;
+    U.tip_side = side;
+}
+
+static void draw_tooltip(SxCanvas *c)
+{
+    if (!U.tip[0])
+        return;
+    int len = (int)strlen(U.tip);
+    int tw = font_width(FACE_BOLD, 13, U.tip, len) + 22;
+    int th = 30;
+    if (tw > U.w - 16)
+        tw = U.w - 16;
+    SxRect a = U.tip_r;
+    int x, y;
+    if (U.tip_side == TIP_RIGHT)
+    {
+        x = a.x + a.w + 10;
+        y = a.y + (a.h - th) / 2;
+    }
+    else if (U.tip_side == TIP_ABOVE)
+    {
+        x = a.x + (a.w - tw) / 2;
+        y = a.y - th - 8;
+    }
+    else
+    {
+        x = a.x + (a.w - tw) / 2;
+        y = a.y + a.h + 8;
+    }
+    int bx = x < 8 ? 8 : x + tw > U.w - 8 ? U.w - 8 - tw : x;
+    int by = y < 4 ? 4 : y + th > U.h - 4 ? U.h - 4 - th : y;
+    sx_fill_rounded_rect(c, bx - 1, by + 1, tw + 2, th + 3, 7, COL_SHADOW);
+    sx_fill_rounded_rect(c, bx, by, tw, th, 6, COL_TOOLTIP);
+    if (U.tip_side == TIP_RIGHT)
+    {
+        int cy = by + th / 2;
+        for (int i = 0; i < 5; i++)
+            sx_fill_rect(c, bx - 5 + i, cy - i, 1, i * 2 + 1, COL_TOOLTIP);
+    }
+    else
+    {
+        int cx = a.x + a.w / 2;
+        if (cx < bx + 10)
+            cx = bx + 10;
+        if (cx > bx + tw - 10)
+            cx = bx + tw - 10;
+        for (int i = 0; i < 5; i++)
+        {
+            if (U.tip_side == TIP_ABOVE)
+                sx_fill_rect(c, cx - i, by + th + 4 - i, i * 2 + 1, 1, COL_TOOLTIP);
+            else
+                sx_fill_rect(c, cx - i, by - 5 + i, i * 2 + 1, 1, COL_TOOLTIP);
+        }
+    }
+    SxRect old = c->clip;
+    sx_canvas_set_clip(c, sx_rect_intersect(old, sx_rect(bx + 8, by, tw - 16, th)));
+    text_center(c, FACE_BOLD, 13, sx_rect(bx, by, tw, th), U.tip, COL_HEADER);
+    sx_canvas_set_clip(c, old);
+}
+
+static void icon_button(SxCanvas *c, SxRect r, IconId icon, int size, uint32_t fg, uint32_t hover_bg, HitKind kind,
+                        Snowflake id, const char *tip, TipSide side)
+{
+    if (hovering(r))
+        sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 6, hover_bg);
+    icon_draw(c, icon, r.x + (r.w - size) / 2, r.y + (r.h - size) / 2, size, fg);
+    add_hit(kind, r, id);
+    tooltip(r, tip, side);
+}
+
+static void drop_shadow(SxCanvas *c, int x, int y, int w)
+{
+    sx_fill_gradient(c, x, y, w, 5, COL_SHADOW, COL_SHADOW & 0x00FFFFFFu);
+}
+
 static void draw_initials(SxCanvas *c, const char *name, SxRect r, uint32_t color)
 {
     char init[16];
@@ -712,6 +1044,14 @@ static void draw_avatar(SxCanvas *c, Snowflake uid, const char *avatar, const ch
         sx_fill_circle(c, x + d / 2.0f, y + d / 2.0f, d / 2.0f, COL_SELECTED);
 }
 
+static void draw_pill(SxCanvas *c, int y, bool selected, bool hovered)
+{
+    if (selected)
+        sx_fill_rounded_rect(c, -4, y + 4, 8, 40, 4, COL_HEADER);
+    else if (hovered)
+        sx_fill_rounded_rect(c, -4, y + 14, 8, 20, 4, COL_HEADER);
+}
+
 static void draw_guild_bar(SxCanvas *c)
 {
     sx_fill_rect(c, 0, 0, GUILD_W, U.h, COL_GUILDBAR);
@@ -724,15 +1064,14 @@ static void draw_guild_bar(SxCanvas *c)
     SxRect home = sx_rect(12, y, 48, 48);
     bool sel = U.guild == 0;
     bool hov = hovering(home);
-    uint32_t bg = sel || hov ? COL_ACCENT : COL_MAIN;
-    sx_fill_rounded_rect(c, home.x, home.y, 48, 48, sel || hov ? 16 : 24, bg);
-    sx_fill_rounded_rect(c, home.x + 13, home.y + 15, 22, 15, 5, sel || hov ? COL_HEADER : COL_TEXT);
-    sx_fill_rect(c, home.x + 17, home.y + 28, 5, 5, sel || hov ? COL_HEADER : COL_TEXT);
-    if (sel)
-        sx_fill_rounded_rect(c, -4, home.y + 4, 8, 40, 4, COL_HEADER);
+    bool lit = sel || hov;
+    sx_fill_rounded_rect(c, home.x, home.y, 48, 48, lit ? 16 : 24, lit ? COL_ACCENT : COL_MAIN);
+    icon_draw(c, ICON_HOME, home.x + 11, home.y + 11, 26, lit ? COL_ON_ACCENT : COL_HEADER);
+    draw_pill(c, home.y, sel, hov);
     add_hit(HIT_HOME, home, 0);
-    y += 56;
-    sx_fill_rect(c, 24, y, 24, 2, COL_SELECTED);
+    tooltip(home, "Direct Messages", TIP_RIGHT);
+    y += 58;
+    sx_fill_rounded_rect(c, 24, y, 24, 2, 1, sx_mix(COL_GUILDBAR, COL_MUTED, 70));
     y += 10;
 
     for (int i = 0; i < S.guild_count; i++)
@@ -741,28 +1080,28 @@ static void draw_guild_bar(SxCanvas *c)
         SxRect r = sx_rect(12, y, 48, 48);
         sel = U.guild == g->id;
         hov = hovering(r);
+        lit = sel || hov;
+        bool visible = r.y + 48 >= 0 && r.y <= U.h;
         bool drawn = false;
-        if (g->icon)
+        if (g->icon && visible)
         {
             char url[300];
             snprintf(url, sizeof(url), "%s/icons/%llu/%s.png?size=96", cdn_base, (unsigned long long)g->id, g->icon);
             SxImage *img;
-            if (r.y + 48 >= 0 && r.y <= U.h && img_request(url, 48, 48, &img) == IMG_READY && img)
+            if (img_request(url, 48, 48, &img) == IMG_READY && img)
             {
-                img_draw(c, img, r.x, r.y, sel || hov ? 16 : 24);
+                img_draw(c, img, r.x, r.y, lit ? 16 : 24);
                 drawn = true;
             }
         }
-        if (!drawn)
+        if (!drawn && visible)
         {
-            sx_fill_rounded_rect(c, r.x, r.y, 48, 48, sel || hov ? 16 : 24, sel || hov ? COL_ACCENT : COL_MAIN);
-            draw_initials(c, g->name, r, COL_HEADER);
+            sx_fill_rounded_rect(c, r.x, r.y, 48, 48, lit ? 16 : 24, lit ? COL_ACCENT : COL_MAIN);
+            draw_initials(c, g->name, r, lit ? COL_ON_ACCENT : COL_HEADER);
         }
-        if (sel)
-            sx_fill_rounded_rect(c, -4, r.y + 4, 8, 40, 4, COL_HEADER);
-        else if (hov)
-            sx_fill_rounded_rect(c, -4, r.y + 14, 8, 20, 4, COL_HEADER);
+        draw_pill(c, r.y, sel, hov);
         add_hit(HIT_GUILD, r, g->id);
+        tooltip(r, g->name, TIP_RIGHT);
         y += 56;
     }
     int content = y + U.guild_scroll + 12;
@@ -771,92 +1110,15 @@ static void draw_guild_bar(SxCanvas *c)
     sx_canvas_set_clip(c, old);
 }
 
-static void draw_hash(SxCanvas *c, int x, int y, uint32_t color)
-{
-    sx_draw_line(c, x + 7, y + 3, x + 5, y + 17, 1.8f, color);
-    sx_draw_line(c, x + 13, y + 3, x + 11, y + 17, 1.8f, color);
-    sx_draw_line(c, x + 3, y + 7.5f, x + 17, y + 7.5f, 1.8f, color);
-    sx_draw_line(c, x + 2, y + 12.5f, x + 16, y + 12.5f, 1.8f, color);
-}
-
-static void draw_speaker(SxCanvas *c, int x, int y, uint32_t color)
-{
-    sx_fill_rect(c, x + 3, y + 7, 4, 6, color);
-    for (int i = 0; i < 6; i++)
-        sx_fill_rect(c, x + 7 + i, y + 7 - i, 1, 6 + i * 2, color);
-    sx_draw_circle(c, x + 13, y + 10, 4, 1.4f, color);
-}
-
-static void draw_mic(SxCanvas *c, int x, int y, uint32_t color, bool off)
-{
-    sx_fill_rounded_rect(c, x + 7, y + 2, 6, 10, 3, color);
-    sx_draw_line(c, x + 4, y + 9, x + 4, y + 11, 1.6f, color);
-    sx_draw_line(c, x + 16, y + 9, x + 16, y + 11, 1.6f, color);
-    sx_draw_line(c, x + 4, y + 11, x + 7, y + 15, 1.6f, color);
-    sx_draw_line(c, x + 16, y + 11, x + 13, y + 15, 1.6f, color);
-    sx_draw_line(c, x + 7, y + 15, x + 13, y + 15, 1.6f, color);
-    sx_draw_line(c, x + 10, y + 15, x + 10, y + 18, 1.6f, color);
-    if (off)
-        sx_draw_line(c, x + 3, y + 2, x + 17, y + 18, 2.0f, COL_RED);
-}
-
-static void draw_headphones(SxCanvas *c, int x, int y, uint32_t color, bool off)
-{
-    sx_draw_line(c, x + 4, y + 11, x + 4, y + 7, 1.6f, color);
-    sx_draw_line(c, x + 4, y + 7, x + 7, y + 3, 1.6f, color);
-    sx_draw_line(c, x + 7, y + 3, x + 13, y + 3, 1.6f, color);
-    sx_draw_line(c, x + 13, y + 3, x + 16, y + 7, 1.6f, color);
-    sx_draw_line(c, x + 16, y + 7, x + 16, y + 11, 1.6f, color);
-    sx_fill_rounded_rect(c, x + 2, y + 10, 5, 7, 2, color);
-    sx_fill_rounded_rect(c, x + 13, y + 10, 5, 7, 2, color);
-    if (off)
-        sx_draw_line(c, x + 3, y + 2, x + 17, y + 18, 2.0f, COL_RED);
-}
-
-static void draw_hangup(SxCanvas *c, int x, int y, uint32_t color)
-{
-    sx_draw_line(c, x + 3, y + 11, x + 17, y + 11, 3.0f, color);
-    sx_draw_line(c, x + 3, y + 11, x + 4, y + 14, 3.0f, color);
-    sx_draw_line(c, x + 17, y + 11, x + 16, y + 14, 3.0f, color);
-}
-
-static void draw_screen_share(SxCanvas *c, int x, int y, uint32_t color, bool live)
-{
-    sx_draw_line(c, x + 2, y + 3, x + 18, y + 3, 1.6f, color);
-    sx_draw_line(c, x + 2, y + 14, x + 18, y + 14, 1.6f, color);
-    sx_draw_line(c, x + 2, y + 3, x + 2, y + 14, 1.6f, color);
-    sx_draw_line(c, x + 18, y + 3, x + 18, y + 14, 1.6f, color);
-    sx_draw_line(c, x + 7, y + 18, x + 13, y + 18, 1.6f, color);
-    sx_draw_line(c, x + 10, y + 14, x + 10, y + 18, 1.6f, color);
-    if (live)
-    {
-        sx_draw_line(c, x + 7, y + 6, x + 13, y + 11, 1.6f, color);
-        sx_draw_line(c, x + 13, y + 6, x + 7, y + 11, 1.6f, color);
-    }
-    else
-    {
-        sx_draw_line(c, x + 10, y + 11, x + 10, y + 6, 1.6f, color);
-        sx_draw_line(c, x + 10, y + 6, x + 7, y + 9, 1.6f, color);
-        sx_draw_line(c, x + 10, y + 6, x + 13, y + 9, 1.6f, color);
-    }
-}
-
 static int draw_live_badge(SxCanvas *c, int right, int y, bool watching)
 {
     const char *text = watching ? "WATCHING" : "LIVE";
     int len = (int)strlen(text);
-    int w = font_width(FACE_BOLD, 10, text, len) + 8;
-    sx_fill_rounded_rect(c, right - w, y + 6, w, 15, 4, watching ? COL_ACCENT : COL_RED);
-    font_draw(c, FACE_BOLD, 10, right - w + 4, y + 17, text, len, SX_RGB(0xFF, 0xFF, 0xFF));
+    int w = font_width(FACE_BOLD, 10, text, len) + 10;
+    uint32_t bg = watching ? COL_ACCENT : COL_RED;
+    sx_fill_rounded_rect(c, right - w, y + 7, w, 15, 8, bg);
+    font_draw(c, FACE_BOLD, 10, right - w + 5, y + 18, text, len, watching ? COL_ON_ACCENT : SX_RGB(0xFF, 0xFF, 0xFF));
     return w + 4;
-}
-
-static void draw_phone(SxCanvas *c, int x, int y, uint32_t color)
-{
-    sx_draw_line(c, x + 5, y + 3, x + 3, y + 7, 2.4f, color);
-    sx_draw_line(c, x + 3, y + 7, x + 8, y + 15, 2.0f, color);
-    sx_draw_line(c, x + 8, y + 15, x + 13, y + 18, 2.0f, color);
-    sx_draw_line(c, x + 13, y + 18, x + 17, y + 16, 2.4f, color);
 }
 
 static const char *display_name(Snowflake id)
@@ -883,31 +1145,29 @@ static int draw_voice_members(SxCanvas *c, Channel *ch, int x, int y, int w)
         User *u = store_user(v->user_id);
         bool speaking = ours && vc_speaking(v->user_id);
         bool watchable = v->streaming && ours && v->user_id != S.me.id;
-        SxRect row = sx_rect(x, y, w, VOICE_ROW);
+        SxRect row = sx_rect(x - 6, y, w + 6, VOICE_ROW);
+        bool hov = hovering(row);
         if (watchable)
         {
-            if (hovering(row))
-                sx_fill_rounded_rect(c, row.x - 4, row.y + 1, row.w + 8, row.h - 2, 4, COL_HOVER);
+            if (hov)
+                sx_fill_rounded_rect(c, row.x, row.y + 1, row.w, row.h - 2, 6, COL_HOVER);
             add_hit(HIT_WATCH, row, v->user_id);
+            tooltip(row, vc_watching() == v->user_id ? "Watching stream" : "Watch stream", TIP_RIGHT);
         }
-        if (speaking)
-            sx_draw_circle(c, x + 12, y + 14, 12.5f, 2.0f, COL_GREEN);
         draw_avatar(c, v->user_id, u ? u->avatar : NULL, u ? u->discriminator : NULL, x + 2, y + 4, 20);
+        if (speaking)
+            sx_draw_circle(c, x + 12, y + 14, 11.5f, 2.0f, COL_GREEN);
         int right = x + w;
         if (v->streaming)
             right -= draw_live_badge(c, right, y, vc_watching() == v->user_id);
-        if (v->deafened)
+        if (v->deafened || v->muted)
         {
-            right -= 20;
-            draw_headphones(c, right, y + 4, COL_MUTED, true);
-        }
-        else if (v->muted)
-        {
-            right -= 20;
-            draw_mic(c, right, y + 4, COL_MUTED, true);
+            right -= 18;
+            icon_draw(c, v->deafened ? ICON_HEADPHONES_OFF : ICON_MIC_OFF, right, y + 6, 16, COL_MUTED);
+            right -= 2;
         }
         font_draw_ellipsis(c, FACE_REGULAR, 14, x + 30, y + 19, display_name(v->user_id), right - x - 34,
-                           speaking ? COL_HEADER : COL_MUTED);
+                           speaking ? COL_HEADER : watchable && hov ? COL_TEXT : COL_MUTED);
         y += VOICE_ROW;
     }
     return n * VOICE_ROW;
@@ -916,7 +1176,8 @@ static int draw_voice_members(SxCanvas *c, Channel *ch, int x, int y, int w)
 static void draw_voice_panel(SxCanvas *c, int x0, int vy)
 {
     sx_fill_rect(c, x0, vy, SIDEBAR_W, VOICE_H, COL_PANEL);
-    sx_fill_rect(c, x0, vy + VOICE_H - 1, SIDEBAR_W, 1, COL_DIVIDER);
+    sx_fill_rect(c, x0, vy, SIDEBAR_W, 1, COL_DIVIDER);
+    sx_fill_rect(c, x0 + 10, vy + VOICE_H - 1, SIDEBAR_W - 20, 1, COL_DIVIDER);
     VcState st = vc_state();
     StreamState ss = vc_stream_state();
     const char *status;
@@ -925,7 +1186,7 @@ static void draw_voice_panel(SxCanvas *c, int x0, int vy)
     {
         case VC_CONNECTED:
             status = ss == SS_LIVE ? "Screen Live" : ss == SS_STARTING ? "Starting Stream..." : "Voice Connected";
-            color = ss == SS_LIVE ? COL_RED : ss == SS_STARTING ? SX_RGB(0xF0, 0xB2, 0x32) : COL_GREEN;
+            color = ss == SS_LIVE ? COL_RED : ss == SS_STARTING ? COL_YELLOW : COL_GREEN;
             break;
         case VC_FAILED:
             status = "Voice Disconnected";
@@ -933,22 +1194,22 @@ static void draw_voice_panel(SxCanvas *c, int x0, int vy)
             break;
         default:
             status = "Connecting...";
-            color = SX_RGB(0xF0, 0xB2, 0x32);
+            color = COL_YELLOW;
             break;
     }
-    font_draw_ellipsis(c, FACE_BOLD, 14, x0 + 12, vy + 22, status, SIDEBAR_W - 110, color);
+    icon_draw(c, ICON_SIGNAL, x0 + 12, vy + 12, 18, color);
+    font_draw_ellipsis(c, FACE_BOLD, 14, x0 + 36, vy + 26, status, SIDEBAR_W - 92, color);
 
     char sub[160];
+    bool lock = false;
     Channel *ch = store_channel(vc_channel());
     if (st == VC_FAILED && vc_error()[0])
         snprintf(sub, sizeof(sub), "%s", vc_error());
     else if (st == VC_CONNECTED && ss == SS_OFF && vc_stream_error()[0])
         snprintf(sub, sizeof(sub), "%s", vc_stream_error());
     else if (vc_watching())
-    {
         snprintf(sub, sizeof(sub), "%s %s", vc_watch_state() == SS_LIVE ? "Watching" : "Opening stream of",
                  display_name(vc_watching()));
-    }
     else if (ss == SS_LIVE)
     {
         int n = vc_stream_viewers();
@@ -962,44 +1223,60 @@ static void draw_voice_panel(SxCanvas *c, int x0, int vy)
         char name[128];
         store_channel_title(ch, name, sizeof(name));
         Guild *g = ch->guild_id ? store_guild(ch->guild_id) : NULL;
-        snprintf(sub, sizeof(sub), "%s%s%s%s", vc_encrypted() ? "E2EE \xc2\xb7 " : "", name, g ? " / " : "",
-                 g ? g->name : "");
+        snprintf(sub, sizeof(sub), "%s%s%s", name, g ? " / " : "", g ? g->name : "");
+        lock = vc_encrypted();
     }
     else
         sub[0] = '\0';
-    font_draw_ellipsis(c, FACE_REGULAR, 12, x0 + 12, vy + 41, sub, SIDEBAR_W - 110, COL_MUTED);
+    int sx = x0 + 12;
+    if (lock)
+    {
+        icon_draw(c, ICON_LOCK, sx, vy + 33, 13, COL_GREEN);
+        sx += 17;
+    }
+    font_draw_ellipsis(c, FACE_REGULAR, 12, sx, vy + 44, sub, x0 + SIDEBAR_W - 56 - sx, COL_MUTED);
+
+    SxRect leave = sx_rect(x0 + SIDEBAR_W - 44, vy + 12, 34, 34);
+    icon_button(c, leave, ICON_HANGUP, 22, st == VC_FAILED ? COL_TEXT : COL_HEADER, COL_HOVER, HIT_VC_LEAVE, 0,
+                "Disconnect", TIP_ABOVE);
 
     SxRect share = sx_rect(x0 + 10, vy + 56, SIDEBAR_W - 20, 32);
     bool can_share = st == VC_CONNECTED;
-    uint32_t share_bg = ss != SS_OFF ? COL_RED : COL_HOVER;
-    if (can_share && hovering(share))
-        share_bg = ss != SS_OFF ? SX_RGB(0xC0, 0x36, 0x3A) : COL_DIVIDER;
-    sx_fill_rounded_rect(c, share.x, share.y, share.w, share.h, 6, share_bg);
+    bool on = ss != SS_OFF;
+    bool hov = can_share && hovering(share);
+    uint32_t bg = on ? (hov ? COL_RED_HI : COL_RED) : (hov ? COL_SELECTED : COL_HOVER);
+    sx_fill_rounded_rect(c, share.x, share.y, share.w, share.h, 6, bg);
     const char *label = ss == SS_OFF ? "Share Screen" : ss == SS_STARTING ? "Cancel" : "Stop Streaming";
-    uint32_t fg = !can_share ? COL_FAINT : ss != SS_OFF ? SX_RGB(0xFF, 0xFF, 0xFF) : COL_TEXT;
+    uint32_t fg = !can_share ? COL_FAINT : on ? SX_RGB(0xFF, 0xFF, 0xFF) : COL_HEADER;
     int lw = font_width(FACE_BOLD, 13, label, (int)strlen(label));
     int lx = share.x + (share.w - lw - 26) / 2;
-    draw_screen_share(c, lx, share.y + 6, fg, ss != SS_OFF);
+    icon_draw(c, on ? ICON_SCREEN_STOP : ICON_SCREEN, lx, share.y + 7, 18, fg);
     font_draw(c, FACE_BOLD, 13, lx + 26, share.y + 21, label, (int)strlen(label), fg);
     if (can_share)
         add_hit(HIT_VC_STREAM, share, 0);
+}
 
-    int bx = x0 + SIDEBAR_W - 100;
-    struct { HitKind kind; int which; } buttons[3] = { { HIT_VC_MUTE, 0 }, { HIT_VC_DEAF, 1 }, { HIT_VC_LEAVE, 2 } };
-    for (int i = 0; i < 3; i++)
-    {
-        SxRect r = sx_rect(bx + i * 32, vy + 13, 30, 30);
-        if (hovering(r))
-            sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 4, COL_HOVER);
-        int ix = r.x + 5, iy = r.y + 5;
-        if (buttons[i].which == 0)
-            draw_mic(c, ix, iy, COL_TEXT, vc_muted() || vc_deafened());
-        else if (buttons[i].which == 1)
-            draw_headphones(c, ix, iy, COL_TEXT, vc_deafened());
-        else
-            draw_hangup(c, ix, iy, st == VC_FAILED ? COL_TEXT : COL_RED);
-        add_hit(buttons[i].kind, r, 0);
-    }
+static void draw_user_panel(SxCanvas *c, int x0, int uy)
+{
+    sx_fill_rect(c, x0, uy, SIDEBAR_W, USER_H, COL_PANEL);
+    draw_avatar(c, S.me.id, S.me.avatar, S.me.discriminator, x0 + 10, uy + 10, 32);
+    sx_fill_circle(c, x0 + 37.5f, uy + 37.5f, 6.5f, COL_PANEL);
+    sx_fill_circle(c, x0 + 37.5f, uy + 37.5f, 4.5f, COL_GREEN);
+
+    int bw = 32;
+    int bx = x0 + SIDEBAR_W - 8 - bw * 3;
+    const char *me = S.me.global_name && *S.me.global_name ? S.me.global_name : S.me.username ? S.me.username : "";
+    font_draw_ellipsis(c, FACE_BOLD, 14, x0 + 52, uy + 23, me, bx - x0 - 56, COL_HEADER);
+    font_draw_ellipsis(c, FACE_REGULAR, 12, x0 + 52, uy + 40, S.me.username ? S.me.username : "", bx - x0 - 56, COL_MUTED);
+
+    bool deaf = vc_deafened();
+    bool muted = vc_muted() || deaf;
+    icon_button(c, sx_rect(bx, uy + 10, bw, bw), muted ? ICON_MIC_OFF : ICON_MIC, 20, muted ? COL_RED : COL_TEXT,
+                COL_HOVER, HIT_VC_MUTE, 0, muted ? "Unmute" : "Mute", TIP_ABOVE);
+    icon_button(c, sx_rect(bx + bw, uy + 10, bw, bw), deaf ? ICON_HEADPHONES_OFF : ICON_HEADPHONES, 20,
+                deaf ? COL_RED : COL_TEXT, COL_HOVER, HIT_VC_DEAF, 0, deaf ? "Undeafen" : "Deafen", TIP_ABOVE);
+    icon_button(c, sx_rect(bx + bw * 2, uy + 10, bw, bw), ICON_LOGOUT, 19, COL_TEXT, COL_HOVER, HIT_LOGOUT, 0,
+                "Log Out", TIP_ABOVE);
 }
 
 static void draw_sidebar(SxCanvas *c)
@@ -1008,11 +1285,8 @@ static void draw_sidebar(SxCanvas *c)
     sx_fill_rect(c, x0, 0, SIDEBAR_W, U.h, COL_SIDEBAR);
     Guild *g = U.guild ? store_guild(U.guild) : NULL;
 
-    SxRect head = sx_rect(x0, 0, SIDEBAR_W, HEADER_H);
     const char *title = g ? g->name : "Direct Messages";
     font_draw_ellipsis(c, FACE_BOLD, 15, x0 + 16, 30, title, SIDEBAR_W - 32, COL_HEADER);
-    sx_fill_rect(c, x0, HEADER_H - 1, SIDEBAR_W, 1, COL_DIVIDER);
-    (void)head;
 
     int voice_h = vc_state() != VC_OFF ? VOICE_H : 0;
     SxRect list = sx_rect(x0, HEADER_H, SIDEBAR_W, U.h - HEADER_H - USER_H - voice_h);
@@ -1030,13 +1304,13 @@ static void draw_sidebar(SxCanvas *c)
             Channel *ch = items[i].ch;
             if (items[i].category)
             {
-                y += 12;
+                y += 14;
                 char upper[100];
                 int k = 0;
                 for (const char *p = ch->name ? ch->name : ""; *p && k < 98; p++)
                     upper[k++] = (*p >= 'a' && *p <= 'z') ? (char)(*p - 32) : *p;
                 upper[k] = '\0';
-                font_draw_ellipsis(c, FACE_BOLD, 12, x0 + 16, y + 14, upper, SIDEBAR_W - 32, COL_MUTED);
+                font_draw_ellipsis(c, FACE_BOLD, 11, x0 + 18, y + 14, upper, SIDEBAR_W - 36, COL_MUTED);
                 y += 22;
                 continue;
             }
@@ -1045,28 +1319,30 @@ static void draw_sidebar(SxCanvas *c)
             bool voice = ch->type == CH_VOICE || ch->type == CH_STAGE;
             bool sel = ch->id == U.channel || (voice && ch->id == vc_channel() && vc_state() != VC_OFF);
             bool hov = (text || voice) && hovering(r);
-            if (sel)
-                sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 4, COL_SELECTED);
-            else if (hov)
-                sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 4, COL_HOVER);
-            uint32_t col = sel ? COL_HEADER : hov ? COL_TEXT : COL_MUTED;
-            if (ch->type == CH_VOICE || ch->type == CH_STAGE)
-                draw_speaker(c, r.x + 8, r.y + 6, sel ? COL_TEXT : COL_FAINT);
-            else
-                draw_hash(c, r.x + 8, r.y + 6, sel ? COL_TEXT : COL_FAINT);
-            font_draw_ellipsis(c, sel ? FACE_BOLD : FACE_REGULAR, 15, r.x + 34, r.y + 21, ch->name ? ch->name : "",
-                               r.w - 42, text || voice ? col : COL_FAINT);
+            if (r.y + r.h >= HEADER_H && r.y <= U.h)
+            {
+                if (sel)
+                    sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 6, COL_SELECTED);
+                else if (hov)
+                    sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 6, COL_HOVER);
+                uint32_t col = !(text || voice) ? COL_FAINT : sel ? COL_HEADER : hov ? COL_TEXT : COL_MUTED;
+                icon_draw(c, voice ? ICON_SPEAKER : ICON_HASH, r.x + 8, r.y + 6, 20, sel ? COL_TEXT : hov ? COL_MUTED : COL_FAINT);
+                font_draw_ellipsis(c, sel ? FACE_BOLD : FACE_REGULAR, 15, r.x + 36, r.y + 21, ch->name ? ch->name : "",
+                                   r.w - 44, col);
+            }
             if (text)
                 add_hit(HIT_CHANNEL, r, ch->id);
             else if (voice)
                 add_hit(HIT_VOICE, r, ch->id);
             y += 34;
             if (voice)
-                y += draw_voice_members(c, ch, x0 + 36, y - 2, SIDEBAR_W - 52);
+                y += draw_voice_members(c, ch, x0 + 38, y - 2, SIDEBAR_W - 54);
         }
     }
     else
     {
+        font_draw(c, FACE_BOLD, 11, x0 + 18, y + 18, "DIRECT MESSAGES", 15, COL_MUTED);
+        y += 30;
         for (int i = 0; i < S.dm_count; i++)
         {
             Channel *ch = S.dms[i];
@@ -1076,9 +1352,9 @@ static void draw_sidebar(SxCanvas *c)
             if (r.y + r.h >= HEADER_H && r.y <= U.h)
             {
                 if (sel)
-                    sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 4, COL_SELECTED);
+                    sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 6, COL_SELECTED);
                 else if (hov)
-                    sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 4, COL_HOVER);
+                    sx_fill_rounded_rect(c, r.x, r.y, r.w, r.h, 6, COL_HOVER);
                 if (ch->type == CH_DM && ch->recipient_count > 0)
                 {
                     User *u = store_user(ch->recipients[0]);
@@ -1087,37 +1363,39 @@ static void draw_sidebar(SxCanvas *c)
                 else
                 {
                     sx_fill_circle(c, r.x + 24, r.y + 21, 16, COL_ACCENT);
-                    draw_initials(c, "G", sx_rect(r.x + 8, r.y + 5, 32, 32), COL_HEADER);
+                    char name[128];
+                    store_channel_title(ch, name, sizeof(name));
+                    draw_initials(c, name, sx_rect(r.x + 8, r.y + 5, 32, 32), COL_ON_ACCENT);
                 }
+                bool in_call = vc_channel() == ch->id && vc_state() != VC_OFF;
+                int name_w = r.w - 58 - (in_call ? 22 : 0);
                 char name[128];
                 store_channel_title(ch, name, sizeof(name));
-                font_draw_ellipsis(c, sel ? FACE_BOLD : FACE_REGULAR, 15, r.x + 50, r.y + 26, name, r.w - 58,
+                font_draw_ellipsis(c, sel ? FACE_BOLD : FACE_REGULAR, 15, r.x + 50, r.y + 26, name, name_w,
                                    sel ? COL_HEADER : hov ? COL_TEXT : COL_MUTED);
+                if (in_call)
+                    icon_draw(c, ICON_SPEAKER, r.x + r.w - 26, r.y + 12, 18, COL_GREEN);
             }
             add_hit(HIT_CHANNEL, r, ch->id);
             y += 44;
         }
         if (S.dm_count == 0)
-            text_wrap(c, FACE_REGULAR, 13, x0 + 16, y + 8, SIDEBAR_W - 32, "No direct messages yet.", COL_MUTED, false);
+            text_wrap(c, FACE_REGULAR, 13, x0 + 18, y + 4, SIDEBAR_W - 36, "No direct messages yet.", COL_MUTED, false);
     }
     int content = y + U.side_scroll + 8 - HEADER_H;
     int view = list.h;
     if (U.side_scroll > content - view)
         U.side_scroll = content - view > 0 ? content - view : 0;
     sx_canvas_set_clip(c, old);
+    sx_fill_rect(c, x0, HEADER_H - 1, SIDEBAR_W, 1, COL_DIVIDER);
+    if (U.side_scroll > 0)
+        drop_shadow(c, x0, HEADER_H, SIDEBAR_W);
 
     int uy = U.h - USER_H;
     if (voice_h)
         draw_voice_panel(c, x0, uy - voice_h);
-    sx_fill_rect(c, x0, uy, SIDEBAR_W, USER_H, COL_PANEL);
-    draw_avatar(c, S.me.id, S.me.avatar, S.me.discriminator, x0 + 10, uy + 10, 32);
-    const char *me = S.me.global_name && *S.me.global_name ? S.me.global_name : S.me.username ? S.me.username : "";
-    font_draw_ellipsis(c, FACE_BOLD, 14, x0 + 50, uy + 22, me, SIDEBAR_W - 130, COL_HEADER);
-    font_draw_ellipsis(c, FACE_REGULAR, 12, x0 + 50, uy + 39, S.me.username ? S.me.username : "", SIDEBAR_W - 130, COL_MUTED);
-    SxRect out = sx_rect(x0 + SIDEBAR_W - 74, uy + 12, 64, 28);
-    sx_fill_rounded_rect(c, out.x, out.y, out.w, out.h, 4, hovering(out) ? COL_SELECTED : COL_HOVER);
-    text_center(c, FACE_REGULAR, 12, out, "Log out", COL_TEXT);
-    add_hit(HIT_LOGOUT, out, 0);
+    draw_user_panel(c, x0, uy);
+    sx_fill_rect(c, x0 + SIDEBAR_W - 1, 0, 1, U.h, COL_DIVIDER);
 }
 
 static bool is_image(const Attachment *a)
@@ -1178,6 +1456,16 @@ static const char *system_text(const Message *m)
     }
 }
 
+static IconId system_icon(const Message *m)
+{
+    switch (m->type)
+    {
+        case 3:  return ICON_PHONE;
+        case 2:  return ICON_LOGOUT;
+        default: return ICON_ARROW;
+    }
+}
+
 static int embed_height(Message *m, int i, int width)
 {
     Embed *e = &m->embeds[i];
@@ -1192,7 +1480,7 @@ static int embed_height(Message *m, int i, int width)
     if (e->description && i < 4)
     {
         if (!m->embed_layouts[i])
-            m->embed_layouts[i] = rich_layout(e->description, inner, 0, COL_TEXT);
+            m->embed_layouts[i] = rich_layout(e->description, inner, 0);
         h += rich_height(m->embed_layouts[i]) + 2;
     }
     if (e->image)
@@ -1211,8 +1499,7 @@ static int message_height(Message *m, int content_w, Snowflake guild_id, bool gr
     if (!m->layout || m->layout_width != content_w)
     {
         rich_free(m->layout);
-        uint32_t color = m->failed ? COL_RED : m->pending ? COL_MUTED : COL_TEXT;
-        m->layout = rich_layout(m->content, content_w, guild_id, color);
+        m->layout = rich_layout(m->content, content_w, guild_id);
         m->layout_width = content_w;
         for (int i = 0; i < 4; i++)
         {
@@ -1222,7 +1509,7 @@ static int message_height(Message *m, int content_w, Snowflake guild_id, bool gr
     }
     int h = grouped ? 2 : 16;
     if (m->is_reply)
-        h += 20;
+        h += 22;
     if (!grouped)
         h += 22;
     h += rich_height(m->layout);
@@ -1237,7 +1524,7 @@ static int message_height(Message *m, int content_w, Snowflake guild_id, bool gr
         }
         else
         {
-            h += 58;
+            h += 62;
         }
     }
     for (int i = 0; i < m->embed_count; i++)
@@ -1262,6 +1549,33 @@ static void format_time(time_t t, char *out, size_t size, bool full)
         strftime(out, size, "%d/%m/%Y %H:%M", &tm);
 }
 
+static int day_of(time_t t)
+{
+    return (int)(t / 86400);
+}
+
+static void format_day(time_t t, char *out, size_t size)
+{
+    static const char *months[] = { "January", "February", "March", "April", "May", "June", "July",
+                                    "August", "September", "October", "November", "December" };
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    snprintf(out, size, "%s %d, %d", months[tm.tm_mon % 12], tm.tm_mday, tm.tm_year + 1900);
+}
+
+static void draw_day_divider(SxCanvas *c, time_t t, int x, int y, int w)
+{
+    char day[48];
+    format_day(t, day, sizeof(day));
+    int len = (int)strlen(day);
+    int tw = font_width(FACE_BOLD, 12, day, len);
+    int mid = y + DAY_H / 2 + 2;
+    int cx = x + w / 2;
+    sx_fill_rect(c, x + 16, mid, cx - tw / 2 - 10 - (x + 16), 1, COL_SELECTED);
+    sx_fill_rect(c, cx + tw / 2 + 10, mid, x + w - 16 - (cx + tw / 2 + 10), 1, COL_SELECTED);
+    font_draw(c, FACE_BOLD, 12, cx - tw / 2, mid + 4, day, len, COL_MUTED);
+}
+
 static void draw_embed(SxCanvas *c, Message *m, int i, int x, int y, int width)
 {
     Embed *e = &m->embeds[i];
@@ -1270,8 +1584,8 @@ static void draw_embed(SxCanvas *c, Message *m, int i, int x, int y, int width)
     if (inner > 420)
         inner = 420;
     int box_w = inner + 32;
-    uint32_t bar = e->color ? (0xFF000000u | e->color) : COL_GUILDBAR;
-    sx_fill_rounded_rect(c, x, y, box_w, h, 4, COL_SIDEBAR);
+    uint32_t bar = e->color ? (0xFF000000u | e->color) : COL_SELECTED;
+    sx_fill_rounded_rect(c, x, y, box_w, h, 6, COL_EMBED);
     sx_fill_rounded_rect(c, x, y, 4, h, 2, bar);
     int cy = y + 8;
     if (e->author)
@@ -1281,12 +1595,15 @@ static void draw_embed(SxCanvas *c, Message *m, int i, int x, int y, int width)
     }
     if (e->title)
     {
-        font_draw_ellipsis(c, FACE_BOLD, 15, x + 16, cy + 16, e->title, inner, e->url ? COL_LINK : COL_HEADER);
+        int tw = font_draw_ellipsis(c, FACE_BOLD, 15, x + 16, cy + 16, e->title, inner, e->url ? COL_LINK : COL_HEADER);
+        if (e->url)
+            link_hit(sx_rect(x + 15, cy, tw + 2, 21), e->url, (int)strlen(e->url), c);
         cy += 22;
     }
     if (e->description && i < 4 && m->embed_layouts[i])
     {
-        rich_draw(c, m->embed_layouts[i], x + 16, cy);
+        rich_draw(c, m->embed_layouts[i], x + 16, cy, COL_TEXT);
+        rich_links(m->embed_layouts[i], x + 16, cy, link_hit, c);
         cy += rich_height(m->embed_layouts[i]) + 2;
     }
     if (e->image)
@@ -1300,29 +1617,36 @@ static void draw_embed(SxCanvas *c, Message *m, int i, int x, int y, int width)
             img_draw(c, img, x + 16, cy + 4, 4);
         else
             sx_fill_rounded_rect(c, x + 16, cy + 4, iw, ih, 4, COL_PANEL);
+        char name[96];
+        url_basename(e->image, name, sizeof(name));
+        add_media(c, sx_rect(x + 16, cy + 4, iw, ih), e->image, e->image, name, NULL, e->image_w, e->image_h, 0);
     }
 }
 
-static void draw_message(SxCanvas *c, Message *m, int x, int y, int content_w, bool grouped)
+static void draw_message(SxCanvas *c, Message *m, int x, int y, int content_w, bool grouped, bool hovered)
 {
     int cx = x + GUTTER;
     if (is_system(m))
     {
         int top = y + (grouped ? 4 : 8);
-        sx_draw_line(c, x + 32, top + 10, x + 46, top + 10, 2, COL_GREEN);
-        sx_draw_line(c, x + 41, top + 5, x + 46, top + 10, 2, COL_GREEN);
-        sx_draw_line(c, x + 41, top + 15, x + 46, top + 10, 2, COL_GREEN);
+        IconId icon = system_icon(m);
+        icon_draw(c, icon, x + 30, top + 1, 18, icon == ICON_LOGOUT ? COL_RED : COL_GREEN);
         int w = font_draw(c, FACE_BOLD, 15, cx, top + 15, m->author_name, (int)strlen(m->author_name), COL_HEADER);
         const char *t = system_text(m);
-        font_draw(c, FACE_REGULAR, 15, cx + w + 5, top + 15, t, (int)strlen(t), COL_MUTED);
+        w += font_draw(c, FACE_REGULAR, 15, cx + w + 5, top + 15, t, (int)strlen(t), COL_MUTED) + 5;
+        char ts[48];
+        format_time(m->timestamp, ts, sizeof(ts), true);
+        font_draw(c, FACE_REGULAR, UI_SMALL_PX, cx + w + 8, top + 15, ts, (int)strlen(ts), COL_FAINT);
         return;
     }
     if (!grouped)
         y += 16;
     if (m->is_reply)
     {
-        sx_draw_line(c, x + 36, y + 18, x + 36, y + 10, 2, COL_FAINT);
-        sx_draw_line(c, x + 36, y + 10, x + 66, y + 10, 2, COL_FAINT);
+        uint32_t spine = COL_SELECTED;
+        sx_draw_line(c, x + 36, y + 20, x + 36, y + 14, 2, spine);
+        icon_arc(c, x + 42, y + 14, 6, 2, 180, 90, spine);
+        sx_draw_line(c, x + 42, y + 8, x + 66, y + 8, 2, spine);
         int w = 0;
         if (m->reply_author && *m->reply_author)
         {
@@ -1336,7 +1660,7 @@ static void draw_message(SxCanvas *c, Message *m, int x, int y, int content_w, b
             snippet[k++] = *p == '\n' ? ' ' : *p;
         snippet[k] = '\0';
         font_draw_ellipsis(c, FACE_REGULAR, 13, cx + w, y + 14, snippet, content_w - w, COL_MUTED);
-        y += 20;
+        y += 22;
     }
     if (!grouped)
     {
@@ -1345,22 +1669,26 @@ static void draw_message(SxCanvas *c, Message *m, int x, int y, int content_w, b
         int w = font_draw(c, FACE_BOLD, UI_NAME_PX, cx, y + 16, m->author_name, (int)strlen(m->author_name), name_col);
         if (m->author_bot)
         {
-            sx_fill_rounded_rect(c, cx + w + 6, y + 3, 30, 16, 3, COL_ACCENT);
-            text_center(c, FACE_BOLD, 10, sx_rect(cx + w + 6, y + 3, 30, 16), "BOT", COL_HEADER);
-            w += 36;
+            SxRect tag = sx_rect(cx + w + 6, y + 3, 32, 16);
+            sx_fill_rounded_rect(c, tag.x, tag.y, tag.w, tag.h, 4, COL_ACCENT);
+            text_center(c, FACE_BOLD, 10, tag, "BOT", COL_ON_ACCENT);
+            w += 38;
         }
         char ts[48];
         format_time(m->timestamp, ts, sizeof(ts), true);
         font_draw(c, FACE_REGULAR, UI_SMALL_PX, cx + w + 8, y + 16, ts, (int)strlen(ts), COL_FAINT);
         y += 22;
     }
-    else if (hovering(sx_rect(x, y, content_w + GUTTER, rich_height(m->layout) + 4)))
+    else if (hovered)
     {
         char ts[16];
         format_time(m->timestamp, ts, sizeof(ts), false);
-        font_draw(c, FACE_REGULAR, 11, x + 22, y + 15, ts, (int)strlen(ts), COL_FAINT);
+        int tw = font_width(FACE_REGULAR, 11, ts, (int)strlen(ts));
+        font_draw(c, FACE_REGULAR, 11, x + GUTTER - 10 - tw, y + 15, ts, (int)strlen(ts), COL_FAINT);
     }
-    rich_draw(c, m->layout, cx, y);
+    uint32_t color = m->failed ? COL_RED : m->pending ? COL_MUTED : COL_TEXT;
+    rich_draw(c, m->layout, cx, y, color);
+    rich_links(m->layout, cx, y, link_hit, c);
     if (m->edited && m->layout && rich_height(m->layout) > 0)
     {
         const char *tag = "(edited)";
@@ -1379,24 +1707,32 @@ static void draw_message(SxCanvas *c, Message *m, int x, int y, int content_w, b
             media_url(src ? src : "", w, h, a->content_type, url, sizeof(url));
             SxImage *img;
             if (y + h + 4 >= c->clip.y && y <= c->clip.y + c->clip.h && img_request(url, w, h, &img) == IMG_READY && img)
-                img_draw(c, img, cx, y + 4, 6);
+                img_draw(c, img, cx, y + 4, 8);
             else
-                sx_fill_rounded_rect(c, cx, y + 4, w, h, 6, COL_SIDEBAR);
+                sx_fill_rounded_rect(c, cx, y + 4, w, h, 8, COL_EMBED);
+            add_media(c, sx_rect(cx, y + 4, w, h), a->url, a->proxy_url ? a->proxy_url : a->url, a->filename,
+                      a->content_type, a->width, a->height, a->size);
             y += h + 6;
         }
         else
         {
             int w = content_w < 400 ? content_w : 400;
-            sx_fill_rounded_rect(c, cx, y + 4, w, 50, 6, COL_SIDEBAR);
-            sx_fill_rounded_rect(c, cx + 12, y + 13, 24, 32, 3, COL_ACCENT);
-            font_draw_ellipsis(c, FACE_REGULAR, 15, cx + 46, y + 26, a->filename, w - 60, COL_LINK);
+            sx_fill_rounded_rect(c, cx, y + 4, w, 54, 8, COL_SELECTED);
+            sx_fill_rounded_rect(c, cx + 1, y + 5, w - 2, 52, 7, COL_EMBED);
+            icon_draw(c, ICON_FILE, cx + 10, y + 13, 36, COL_ACCENT);
+            int fw = font_draw_ellipsis(c, FACE_REGULAR, 15, cx + 52, y + 27, a->filename, w - 64, COL_LINK);
+            if (a->url)
+            {
+                SxRect fr = sx_rect(cx + 51, y + 10, fw + 2, 22);
+                link_hit(fr, a->url, (int)strlen(a->url), c);
+            }
             char size[48];
             if (a->size >= 1024 * 1024)
                 snprintf(size, sizeof(size), "%.2f MB", a->size / (1024.0 * 1024.0));
             else
                 snprintf(size, sizeof(size), "%.1f KB", a->size / 1024.0);
-            font_draw(c, FACE_REGULAR, 12, cx + 46, y + 44, size, (int)strlen(size), COL_FAINT);
-            y += 58;
+            font_draw(c, FACE_REGULAR, 12, cx + 52, y + 46, size, (int)strlen(size), COL_FAINT);
+            y += 62;
         }
     }
     for (int i = 0; i < m->embed_count; i++)
@@ -1415,6 +1751,39 @@ static bool group_with(const Message *prev, const Message *m)
     return m->timestamp - prev->timestamp < 420;
 }
 
+static void draw_channel_header(SxCanvas *c, Channel *ch, int x0, int w)
+{
+    if (!ch)
+        return;
+    char name[128];
+    store_channel_title(ch, name, sizeof(name));
+    int hx = x0 + 16;
+    icon_draw(c, ch->guild_id ? ICON_HASH : ICON_AT, hx, 12, 24, COL_FAINT);
+    hx += 32;
+    int right = x0 + w - 16;
+    if (!ch->guild_id)
+    {
+        bool in_call = vc_channel() == ch->id && vc_state() != VC_OFF && vc_state() != VC_FAILED;
+        SxRect call = sx_rect(right - 36, 6, 36, 36);
+        icon_button(c, call, in_call ? ICON_HANGUP : ICON_PHONE, 22, in_call ? COL_RED : COL_MUTED, COL_INPUT, HIT_CALL,
+                    ch->id, in_call ? "Leave Call" : "Start Voice Call", TIP_BELOW);
+        if (hovering(call) && !in_call)
+            icon_draw(c, ICON_PHONE, call.x + 7, call.y + 7, 22, COL_HEADER);
+        right = call.x - 8;
+    }
+    int nw = font_draw_ellipsis(c, FACE_BOLD, 16, hx, 30, name, right - hx, COL_HEADER);
+    if (ch->topic && *ch->topic && right - (hx + nw + 24) > 40)
+    {
+        sx_fill_rect(c, hx + nw + 12, 15, 1, 20, COL_SELECTED);
+        char topic[200];
+        int k = 0;
+        for (const char *p = ch->topic; *p && k < 190; p++)
+            topic[k++] = *p == '\n' ? ' ' : *p;
+        topic[k] = '\0';
+        font_draw_ellipsis(c, FACE_REGULAR, 13, hx + nw + 24, 30, topic, right - (hx + nw + 24), COL_MUTED);
+    }
+}
+
 static void draw_messages(SxCanvas *c)
 {
     int x0 = GUILD_W + SIDEBAR_W;
@@ -1422,39 +1791,8 @@ static void draw_messages(SxCanvas *c)
     sx_fill_rect(c, x0, 0, w, U.h, COL_MAIN);
 
     Channel *ch = U.channel ? store_channel(U.channel) : NULL;
-
+    draw_channel_header(c, ch, x0, w);
     sx_fill_rect(c, x0, HEADER_H - 1, w, 1, COL_DIVIDER);
-    if (ch)
-    {
-        char name[128];
-        store_channel_title(ch, name, sizeof(name));
-        int hx = x0 + 16;
-        if (ch->guild_id)
-            draw_hash(c, hx, 14, COL_FAINT);
-        else
-            font_draw(c, FACE_BOLD, 18, hx, 31, "@", 1, COL_FAINT);
-        hx += 28;
-        int nw = font_draw_ellipsis(c, FACE_BOLD, 15, hx, 30, name, w - 200, COL_HEADER);
-        if (!ch->guild_id)
-        {
-            SxRect call = sx_rect(x0 + w - 46, 9, 30, 30);
-            bool in_call = vc_channel() == ch->id && vc_state() != VC_OFF && vc_state() != VC_FAILED;
-            if (hovering(call))
-                sx_fill_rounded_rect(c, call.x, call.y, call.w, call.h, 4, COL_HOVER);
-            draw_phone(c, call.x + 5, call.y + 5, in_call ? COL_GREEN : COL_TEXT);
-            add_hit(HIT_CALL, call, ch->id);
-        }
-        if (ch->topic && *ch->topic)
-        {
-            sx_fill_rect(c, hx + nw + 12, 16, 1, 18, COL_SELECTED);
-            char topic[200];
-            int k = 0;
-            for (const char *p = ch->topic; *p && k < 190; p++)
-                topic[k++] = *p == '\n' ? ' ' : *p;
-            topic[k] = '\0';
-            font_draw_ellipsis(c, FACE_REGULAR, 13, hx + nw + 24, 30, topic, w - (hx - x0) - nw - 40, COL_MUTED);
-        }
-    }
 
     int input_y = U.h - INPUT_GAP - INPUT_H;
     SxRect area = sx_rect(x0, HEADER_H, w, input_y - 8 - HEADER_H);
@@ -1464,7 +1802,9 @@ static void draw_messages(SxCanvas *c)
     {
         const char *msg = S.ready ? (U.guild ? "This server has no text channels you can see." : "Pick a conversation on the left.")
                                   : "Loading...";
+        icon_draw(c, U.guild ? ICON_HASH : ICON_HOME, area.x + area.w / 2 - 28, area.y + area.h / 2 - 72, 56, COL_SELECTED);
         text_center(c, FACE_REGULAR, 15, area, msg, COL_MUTED);
+        drop_shadow(c, x0, HEADER_H, w);
         return;
     }
 
@@ -1477,14 +1817,17 @@ static void draw_messages(SxCanvas *c)
     int count = ch->message_count;
     int *heights = count ? malloc(sizeof(int) * (size_t)count) : NULL;
     bool *grouped = count ? malloc(sizeof(bool) * (size_t)count) : NULL;
+    bool *newday = count ? malloc(sizeof(bool) * (size_t)count) : NULL;
     int total = 0;
-    for (int i = 0; heights && grouped && i < count; i++)
+    for (int i = 0; heights && grouped && newday && i < count; i++)
     {
-        grouped[i] = group_with(i ? ch->messages[i - 1] : NULL, ch->messages[i]);
-        heights[i] = message_height(ch->messages[i], content_w, ch->guild_id, grouped[i]);
+        Message *prev = i ? ch->messages[i - 1] : NULL;
+        newday[i] = prev ? day_of(prev->timestamp) != day_of(ch->messages[i]->timestamp) : !ch->has_more;
+        grouped[i] = !newday[i] && group_with(prev, ch->messages[i]);
+        heights[i] = message_height(ch->messages[i], content_w, ch->guild_id, grouped[i]) + (newday[i] ? DAY_H : 0);
         total += heights[i];
     }
-    int intro_h = ch->has_more && ch->message_count ? 48 : 110;
+    int intro_h = ch->has_more && ch->message_count ? 48 : 150;
     total += intro_h + 16;
 
     Snowflake newest = count ? ch->messages[count - 1]->id : 0;
@@ -1503,11 +1846,23 @@ static void draw_messages(SxCanvas *c)
 
     int bottom = area.y + area.h - 16 + U.msg_scroll;
     int yb = bottom;
-    for (int i = count - 1; heights && grouped && i >= 0; i--)
+    for (int i = count - 1; heights && grouped && newday && i >= 0; i--)
     {
         int top = yb - heights[i];
         if (top < area.y + area.h && yb > area.y)
-            draw_message(c, ch->messages[i], x0, top, content_w, grouped[i]);
+        {
+            Message *m = ch->messages[i];
+            int mt = top;
+            if (newday[i])
+            {
+                draw_day_divider(c, m->timestamp, x0, top, w);
+                mt += DAY_H;
+            }
+            bool hov = hovering(sx_rect(x0, mt, w, yb - mt)) && sx_rect_contains(area, U.hover_x, U.hover_y);
+            if (hov)
+                sx_fill_rect(c, x0, mt + (grouped[i] ? 0 : 8), w, yb - mt - (grouped[i] ? 0 : 8), COL_MSG_HOVER);
+            draw_message(c, m, x0, mt, content_w, grouped[i], hov);
+        }
         yb = top;
     }
     int intro_top = yb - intro_h;
@@ -1515,35 +1870,41 @@ static void draw_messages(SxCanvas *c)
     {
         if (ch->has_more && ch->message_count)
         {
-            text_center(c, FACE_REGULAR, 13, sx_rect(x0, intro_top, w, intro_h), ch->loading ? "Loading older messages..." : "", COL_MUTED);
+            if (ch->loading)
+                icon_spinner(c, x0 + w / 2, intro_top + intro_h / 2, 9, 3, uptime_ms() / 900.0f, COL_MUTED);
         }
         else if (ch->loaded)
         {
             char name[128];
             store_channel_title(ch, name, sizeof(name));
+            int ix = x0 + 16;
+            sx_fill_circle(c, ix + 34, intro_top + 34, 34, COL_SELECTED);
+            icon_draw(c, ch->guild_id ? ICON_HASH : ICON_AT, ix + 12, intro_top + 12, 44, COL_HEADER);
             char line[200];
             snprintf(line, sizeof(line), ch->guild_id ? "Welcome to #%s!" : "%s", name);
-            font_draw(c, FACE_BOLD, 26, x0 + 16, intro_top + 50, line, (int)strlen(line), COL_HEADER);
-            const char *sub = ch->guild_id ? "This is the start of this channel." : "This is the beginning of your direct message history.";
-            font_draw(c, FACE_REGULAR, 14, x0 + 16, intro_top + 78, sub, (int)strlen(sub), COL_MUTED);
+            font_draw_ellipsis(c, FACE_BOLD, 26, ix, intro_top + 104, line, w - 32, COL_HEADER);
+            const char *sub = ch->guild_id ? "This is the start of the channel." : "This is the beginning of your direct message history.";
+            font_draw_ellipsis(c, FACE_REGULAR, 14, ix, intro_top + 130, sub, w - 32, COL_MUTED);
         }
     }
     free(heights);
     free(grouped);
+    free(newday);
 
     if (!ch->loaded)
     {
         if (ch->load_failed)
         {
-            text_center(c, FACE_REGULAR, 15, sx_rect(area.x, area.y + area.h / 2 - 30, area.w, 24), ch->error, COL_MUTED);
-            SxRect btn = sx_rect(area.x + area.w / 2 - 50, area.y + area.h / 2, 100, 32);
-            sx_fill_rounded_rect(c, btn.x, btn.y, btn.w, btn.h, 4, hovering(btn) ? COL_ACCENT_HI : COL_ACCENT);
-            text_center(c, FACE_BOLD, 14, btn, "Retry", COL_HEADER);
+            text_center(c, FACE_REGULAR, 15, sx_rect(area.x, area.y + area.h / 2 - 34, area.w, 24), ch->error, COL_MUTED);
+            SxRect btn = sx_rect(area.x + area.w / 2 - 50, area.y + area.h / 2, 100, 34);
+            sx_fill_rounded_rect(c, btn.x, btn.y, btn.w, btn.h, 6, hovering(btn) ? COL_ACCENT_HI : COL_ACCENT);
+            text_center(c, FACE_BOLD, 14, btn, "Retry", COL_ON_ACCENT);
             add_hit(HIT_RETRY_LOAD, btn, ch->id);
         }
         else
         {
-            text_center(c, FACE_REGULAR, 15, area, "Loading messages...", COL_MUTED);
+            icon_spinner(c, area.x + area.w / 2, area.y + area.h / 2 - 14, 14, 4, uptime_ms() / 900.0f, COL_ACCENT);
+            text_center(c, FACE_REGULAR, 14, sx_rect(area.x, area.y + area.h / 2 + 10, area.w, 24), "Loading messages...", COL_MUTED);
         }
     }
 
@@ -1551,28 +1912,32 @@ static void draw_messages(SxCanvas *c)
     {
         int track = area.h - 8;
         int thumb = track * area.h / total;
-        if (thumb < 24)
-            thumb = 24;
+        if (thumb < 32)
+            thumb = 32;
         int pos = (int)((long)(track - thumb) * (max_scroll - U.msg_scroll) / (max_scroll ? max_scroll : 1));
+        sx_fill_rounded_rect(c, U.w - 12, area.y + 4, 8, track, 4, COL_EMBED);
         sx_fill_rounded_rect(c, U.w - 12, area.y + 4 + pos, 8, thumb, 4, COL_GUILDBAR);
     }
     sx_canvas_set_clip(c, old);
+    drop_shadow(c, x0, HEADER_H, w);
 
     if (ch->loaded && ch->has_more && !ch->loading && U.msg_scroll + area.h > total - 600)
         load_messages(ch, true);
 
     SxRect in = sx_rect(x0 + 16, input_y, w - 32, INPUT_H);
-    sx_fill_rounded_rect(c, in.x, in.y, in.w, in.h, 8, COL_INPUT);
+    sx_fill_rounded_rect(c, in.x, in.y, in.w, in.h, 10, COL_INPUT);
     char placeholder[160];
     char name[128];
     store_channel_title(ch, name, sizeof(name));
     snprintf(placeholder, sizeof(placeholder), "Message %s%s", ch->guild_id ? "#" : "@", name);
-    draw_field(c, &U.input, in, U.focused, false, placeholder, 15);
+    draw_field(c, &U.input, sx_rect(in.x + 4, in.y, in.w - 8, in.h), U.focused, false, placeholder, 15);
     add_hit(HIT_INPUT, in, 0);
 
     if (U.status[0] && uptime_ms() - U.status_at < 5000)
     {
-        font_draw_ellipsis(c, FACE_REGULAR, 12, in.x + 4, U.h - 6, U.status, in.w, COL_RED);
+        uint32_t sc = U.status_ok ? COL_GREEN : COL_RED;
+        icon_draw(c, U.status_ok ? ICON_CHECK : ICON_CLOSE, in.x + 2, U.h - 19, 13, sc);
+        font_draw_ellipsis(c, FACE_REGULAR, 12, in.x + 20, U.h - 8, U.status, in.w - 20, sc);
     }
 }
 
@@ -1580,7 +1945,7 @@ static void draw_qr_panel(SxCanvas *c, SxRect r)
 {
     RaState st = ra_state();
     SxRect box = sx_rect(r.x + (r.w - 176) / 2, r.y, 176, 176);
-    sx_fill_rounded_rect(c, box.x, box.y, box.w, box.h, 8, SX_RGB(0xFF, 0xFF, 0xFF));
+    sx_fill_rounded_rect(c, box.x, box.y, box.w, box.h, 10, SX_RGB(0xFF, 0xFF, 0xFF));
 
     if (st == RA_WAITING && ra_fingerprint()[0])
     {
@@ -1615,12 +1980,15 @@ static void draw_qr_panel(SxCanvas *c, SxRect r)
     }
     else if (st == RA_FAILED)
     {
+        SxRect inner = sx_rect(box.x + 8, box.y + 8, box.w - 16, box.h - 16);
+        bool hov = hovering(box);
+        sx_fill_rounded_rect(c, inner.x, inner.y, inner.w, inner.h, 8, hov ? SX_RGB(0xE6, 0xE7, 0xEA) : SX_RGB(0xF2, 0xF3, 0xF5));
         text_center(c, FACE_BOLD, 14, sx_rect(box.x, box.y + 60, box.w, 24), "Click to refresh", SX_RGB(0x31, 0x33, 0x38));
         add_hit(HIT_QR_RETRY, box, 0);
     }
     else
     {
-        text_center(c, FACE_REGULAR, 14, box, "Preparing...", SX_RGB(0x5C, 0x5E, 0x66));
+        icon_spinner(c, box.x + box.w / 2, box.y + box.h / 2, 18, 4, uptime_ms() / 900.0f, SX_RGB(0x5C, 0x5E, 0x66));
     }
 
     int y = box.y + box.h + 28;
@@ -1641,34 +2009,43 @@ static void draw_qr_panel(SxCanvas *c, SxRect r)
 
 static void draw_login(SxCanvas *c)
 {
-    sx_fill_gradient(c, 0, 0, U.w, U.h, SX_RGB(0x40, 0x4E, 0xED), SX_RGB(0x23, 0x27, 0x6E));
-    int cw = 780, ch = 420;
+    sx_fill_gradient(c, 0, 0, U.w, U.h, sx_mix(COL_GUILDBAR, COL_ACCENT, 70), COL_GUILDBAR);
+    sx_fill_circle(c, U.w * 0.12f, U.h * 0.88f, U.h * 0.35f, (COL_ACCENT & 0xFFFFFFu) | 0x10000000u);
+    sx_fill_circle(c, U.w * 0.9f, U.h * 0.1f, U.h * 0.28f, (COL_ACCENT & 0xFFFFFFu) | 0x0C000000u);
+    int cw = 780, ch = 440;
     if (cw > U.w - 32)
         cw = U.w - 32;
     int cx = (U.w - cw) / 2, cy = (U.h - ch) / 2;
-    sx_fill_rounded_rect(c, cx, cy, cw, ch, 8, COL_MAIN);
+    sx_fill_rounded_rect(c, cx - 2, cy + 4, cw + 4, ch + 6, 14, COL_SHADOW);
+    sx_fill_rounded_rect(c, cx, cy, cw, ch, 12, COL_MAIN);
 
     int lw = cw - 64 - 296;
     int lx = cx + 32;
-    text_center(c, FACE_BOLD, 24, sx_rect(lx, cy + 32, lw, 32), "Welcome back!", COL_HEADER);
-    text_center(c, FACE_REGULAR, 15, sx_rect(lx, cy + 66, lw, 22), "We're so excited to see you again!", COL_MUTED);
+    text_center(c, FACE_BOLD, 24, sx_rect(lx, cy + 36, lw, 32), "Welcome back!", COL_HEADER);
+    text_center(c, FACE_REGULAR, 15, sx_rect(lx, cy + 70, lw, 22), "We're so excited to see you again!", COL_MUTED);
 
-    int fy = cy + 120;
+    int fy = cy + 128;
     font_draw(c, FACE_BOLD, 12, lx, fy, "TOKEN", 5, COL_MUTED);
-    font_draw(c, FACE_REGULAR, 12, lx + 48, fy, "*", 1, COL_RED);
-    SxRect field = sx_rect(lx, fy + 10, lw, 40);
-    sx_fill_rounded_rect(c, field.x, field.y, field.w, field.h, 4, COL_GUILDBAR);
-    draw_field(c, &U.token, field, U.token_focus && U.focused, true, NULL, 15);
+    font_draw(c, FACE_BOLD, 12, lx + font_width(FACE_BOLD, 12, "TOKEN", 5) + 4, fy, "*", 1, COL_RED);
+    SxRect field = sx_rect(lx, fy + 10, lw, 42);
+    bool focus = U.token_focus && U.focused;
+    if (focus)
+        sx_fill_rounded_rect(c, field.x - 2, field.y - 2, field.w + 4, field.h + 4, 8, COL_ACCENT);
+    sx_fill_rounded_rect(c, field.x, field.y, field.w, field.h, 6, COL_GUILDBAR);
+    draw_field(c, &U.token, field, focus, true, "Paste your token", 15);
     add_hit(HIT_TOKEN, field, 0);
 
-    SxRect btn = sx_rect(lx, fy + 66, lw, 44);
-    sx_fill_rounded_rect(c, btn.x, btn.y, btn.w, btn.h, 4, hovering(btn) ? COL_ACCENT_HI : COL_ACCENT);
-    text_center(c, FACE_BOLD, 15, btn, "Log In", COL_HEADER);
+    SxRect btn = sx_rect(lx, fy + 68, lw, 44);
+    sx_fill_rounded_rect(c, btn.x, btn.y, btn.w, btn.h, 6, hovering(btn) ? COL_ACCENT_HI : COL_ACCENT);
+    text_center(c, FACE_BOLD, 15, btn, "Log In", COL_ON_ACCENT);
     add_hit(HIT_LOGIN, btn, 0);
 
-    int ny = fy + 128;
+    int ny = fy + 130;
     if (U.login_error[0])
-        ny += text_wrap(c, FACE_REGULAR, 13, lx, ny, lw, U.login_error, COL_RED, false) + 8;
+    {
+        icon_draw(c, ICON_CLOSE, lx, ny + 1, 14, COL_RED);
+        ny += text_wrap(c, FACE_REGULAR, 13, lx + 20, ny, lw - 20, U.login_error, COL_RED, false) + 8;
+    }
     ny += text_wrap(c, FACE_REGULAR, 12, lx, ny, lw,
                     "Bot accounts: type \"Bot \" before the token. The token is saved in /config/discord/token, "
                     "so you can also place it there.",
@@ -1676,22 +2053,96 @@ static void draw_login(SxCanvas *c)
     text_wrap(c, FACE_REGULAR, 12, lx, ny, lw,
               "Third-party clients are against Discord's Terms of Service. Use at your own risk.", COL_FAINT, false);
 
-    sx_fill_rect(c, cx + cw - 280 - 16, cy + 32, 1, ch - 64, COL_SELECTED);
-    draw_qr_panel(c, sx_rect(cx + cw - 280, cy + 40, 248, ch - 80));
+    sx_fill_rect(c, cx + cw - 280 - 16, cy + 36, 1, ch - 72, COL_SELECTED);
+    draw_qr_panel(c, sx_rect(cx + cw - 280, cy + 44, 248, ch - 88));
 }
 
 static void draw_connecting(SxCanvas *c)
 {
     sx_fill_rect(c, 0, 0, U.w, U.h, COL_MAIN);
-    int phase = (int)(uptime_ms() / 300 % 4);
-    char dots[8] = "";
-    for (int i = 0; i < phase; i++)
-        strcat(dots, ".");
-    char line[64];
-    snprintf(line, sizeof(line), "Connecting to Discord%s", dots);
-    sx_fill_circle(c, U.w / 2.0f, U.h / 2.0f - 50, 32, COL_ACCENT);
-    text_center(c, FACE_BOLD, 18, sx_rect(0, U.h / 2 - 10, U.w, 30), line, COL_HEADER);
-    text_center(c, FACE_REGULAR, 13, sx_rect(0, U.h / 2 + 22, U.w, 20), "Loading your servers and messages.", COL_MUTED);
+    float cx = U.w / 2.0f, cy = U.h / 2.0f - 46;
+    sx_fill_circle(c, cx, cy, 30, COL_ACCENT);
+    icon_draw(c, ICON_HOME, (int)cx - 16, (int)cy - 16, 32, COL_ON_ACCENT);
+    icon_spinner(c, (int)cx, (int)cy, 40, 4, uptime_ms() / 1000.0f, COL_ACCENT);
+    text_center(c, FACE_BOLD, 18, sx_rect(0, U.h / 2 + 8, U.w, 30), "Connecting to Discord", COL_HEADER);
+    text_center(c, FACE_REGULAR, 13, sx_rect(0, U.h / 2 + 38, U.w, 20), "Loading your servers and messages.", COL_MUTED);
+}
+
+static void format_size(long size, char *out, size_t n)
+{
+    if (size >= 1024 * 1024)
+        snprintf(out, n, "%.2f MB", size / (1024.0 * 1024.0));
+    else if (size > 0)
+        snprintf(out, n, "%.1f KB", size / 1024.0);
+    else
+        out[0] = '\0';
+}
+
+static void draw_viewer(SxCanvas *c)
+{
+    Viewer *v = &U.view;
+    sx_fill_rect(c, 0, 0, U.w, U.h, (sx_darken(COL_GUILDBAR, 120) & 0xFFFFFFu) | 0xE0000000u);
+    add_hit(HIT_VIEW_BG, sx_rect(0, 0, U.w, U.h), 0);
+
+    int max_w = U.w - 96, max_h = U.h - 172;
+    if (max_w < 64)
+        max_w = 64;
+    if (max_h < 64)
+        max_h = 64;
+    int w, h;
+    fit_box(v->w, v->h, max_w, max_h, &w, &h);
+    int x = (U.w - w) / 2, y = 80 + (max_h - h) / 2;
+
+    char url[1400];
+    media_url(v->proxy, w, h, v->ctype, url, sizeof(url));
+    SxImage *img;
+    ImgState st = img_request(url, w, h, &img);
+    if (st == IMG_READY && img)
+        img_draw(c, img, x, y, 8);
+    else
+    {
+        sx_fill_rounded_rect(c, x, y, w, h, 8, (COL_MAIN & 0xFFFFFFu) | 0x80000000u);
+        if (st == IMG_FAILED)
+            text_center(c, FACE_REGULAR, 14, sx_rect(x, y, w, h), "Couldn't load this image.", COL_MUTED);
+        else
+            icon_spinner(c, x + w / 2, y + h / 2, 16, 4, uptime_ms() / 900.0f, COL_HEADER);
+    }
+    add_hit(HIT_VIEW_IMG, sx_rect(x, y, w, h), 0);
+
+    char info[160], size[32];
+    format_size(v->size, size, sizeof(size));
+    if (v->w > 0 && v->h > 0)
+        snprintf(info, sizeof(info), "%d \xc3\x97 %d%s%s", v->w, v->h, size[0] ? "  \xc2\xb7  " : "", size);
+    else
+        snprintf(info, sizeof(info), "%s", size);
+    int ty = y + h + 28;
+    text_center(c, FACE_BOLD, 14, sx_rect(x - 200, ty - 16, w + 400, 20), v->name, COL_HEADER);
+    if (info[0])
+        text_center(c, FACE_REGULAR, 12, sx_rect(x - 200, ty + 4, w + 400, 18), info, COL_MUTED);
+
+    int bw = 40, gap = 4, n = 3;
+    int tw = n * bw + (n - 1) * gap + 12;
+    SxRect bar = sx_rect(U.w - tw - 16, 14, tw, bw + 12);
+    sx_fill_rounded_rect(c, bar.x, bar.y + 2, bar.w, bar.h, 12, COL_SHADOW);
+    sx_fill_rounded_rect(c, bar.x, bar.y, bar.w, bar.h, 12, COL_PANEL);
+    int bx = bar.x + 6, by = bar.y + 6;
+    icon_button(c, sx_rect(bx, by, bw, bw), ICON_DOWNLOAD, 22, COL_HEADER, COL_HOVER, HIT_VIEW_SAVE, 0,
+                "Download", TIP_BELOW);
+    icon_button(c, sx_rect(bx + bw + gap, by, bw, bw), ICON_EXTERNAL, 21, COL_HEADER, COL_HOVER, HIT_VIEW_OPEN, 0,
+                "Open in NetSurf", TIP_BELOW);
+    icon_button(c, sx_rect(bx + 2 * (bw + gap), by, bw, bw), ICON_CLOSE, 22, COL_HEADER, COL_HOVER, HIT_VIEW_CLOSE, 0,
+                "Close (Esc)", TIP_BELOW);
+
+    if (U.status[0] && uptime_ms() - U.status_at < 5000)
+    {
+        int sw = font_width(FACE_BOLD, 13, U.status, (int)strlen(U.status)) + 52;
+        if (sw > U.w - 32)
+            sw = U.w - 32;
+        SxRect toast = sx_rect((U.w - sw) / 2, 22, sw, 36);
+        sx_fill_rounded_rect(c, toast.x, toast.y, toast.w, toast.h, 18, U.status_ok ? COL_GREEN : COL_RED);
+        icon_draw(c, U.status_ok ? ICON_CHECK : ICON_CLOSE, toast.x + 12, toast.y + 9, 18, SX_RGB(0xFF, 0xFF, 0xFF));
+        font_draw_ellipsis(c, FACE_BOLD, 13, toast.x + 38, toast.y + 23, U.status, toast.w - 50, SX_RGB(0xFF, 0xFF, 0xFF));
+    }
 }
 
 static void draw(void)
@@ -1700,6 +2151,14 @@ static void draw(void)
     U.w = c->width;
     U.h = c->height;
     U.hit_count = 0;
+    U.tip[0] = '\0';
+    U.pool_len = 0;
+    U.media_count = 0;
+    pal_refresh();
+    bool viewing = U.view.open && U.screen == SCREEN_MAIN;
+    int hx = U.hover_x, hy = U.hover_y;
+    if (viewing)
+        U.hover_x = U.hover_y = -1;
     sx_canvas_reset_clip(c);
     switch (U.screen)
     {
@@ -1715,6 +2174,15 @@ static void draw(void)
             draw_guild_bar(c);
             break;
     }
+    sx_canvas_reset_clip(c);
+    if (viewing)
+    {
+        U.hover_x = hx;
+        U.hover_y = hy;
+        U.tip[0] = '\0';
+        draw_viewer(c);
+    }
+    draw_tooltip(c);
     sx_window_commit(U.win);
     U.dirty = false;
 }
@@ -1783,6 +2251,24 @@ static void on_click(int x, int y)
         case HIT_VC_LEAVE:
             vc_leave();
             break;
+        case HIT_LINK:
+            open_url(pool_get((int)h->id));
+            break;
+        case HIT_IMAGE:
+            if (h->id < (Snowflake)U.media_count)
+                viewer_open(&U.media[h->id]);
+            break;
+        case HIT_VIEW_BG:
+        case HIT_VIEW_CLOSE:
+            viewer_close();
+            break;
+        case HIT_VIEW_SAVE:
+            download_view();
+            break;
+        case HIT_VIEW_OPEN:
+            if (U.view.open)
+                open_url(U.view.url);
+            break;
         case HIT_RETRY_LOAD:
         {
             Channel *ch = store_channel(h->id);
@@ -1798,6 +2284,8 @@ static void on_click(int x, int y)
 
 static void on_wheel(int x, int y, int wheel)
 {
+    if (U.view.open)
+        return;
     Hit *h = NULL;
     for (int i = 0; i < U.hit_count; i++)
         if ((U.hits[i].kind == HIT_GUILD_AREA || U.hits[i].kind == HIT_SIDEBAR_AREA || U.hits[i].kind == HIT_MESSAGES_AREA) &&
@@ -1835,6 +2323,14 @@ static void on_key(const SxEvent *ev)
     }
     if (U.screen != SCREEN_MAIN)
         return;
+    if (U.view.open)
+    {
+        if (ev->key == SX_KEY_ESCAPE)
+            viewer_close();
+        else if ((ev->mods & SX_MOD_CTRL) && (ev->key == 's' || ev->ch == 's' || ev->ch == 19))
+            download_view();
+        return;
+    }
     int page = U.h - HEADER_H - INPUT_H - INPUT_GAP - 80;
     switch (ev->key)
     {
@@ -1991,8 +2487,8 @@ int main(int argc, char **argv)
                 if (d < timeout)
                     timeout = d;
             }
-        if (U.screen == SCREEN_CONNECTING && timeout > 100)
-            timeout = 100;
+        if (U.screen == SCREEN_CONNECTING && timeout > 33)
+            timeout = 33;
         if (U.dirty || U.ra_start_pending || http_busy() || gw_has_buffered() || ra_has_buffered())
             timeout = http_busy() && !U.dirty ? 15 : 0;
         poll(fds, (uint64_t)n, timeout);
