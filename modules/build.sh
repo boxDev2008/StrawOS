@@ -77,6 +77,7 @@ PIDS+=($!)
 PIDS+=($!)
 ./opus.sh &
 PIDS+=($!)
+./vpx.sh
 
 compile lib/libc/crt0.c;   CRT0=$OUT
 compile lib/libc/libc.c;   LIBC=$OUT
@@ -110,7 +111,7 @@ done
 
 VOICE=()
 for src in src/discord/voice/*.c; do
-    compile "$src" "${NET[@]}" -Ilib/opus/include
+    compile "$src" "${NET[@]}" -Ilib/opus/include -Ilib/libvpx -Iobj/libvpx-cfg
     VOICE+=($OUT)
 done
 for dep in net json util; do
@@ -135,7 +136,7 @@ link bin/audio.elf   "${BASE[@]}" $AUDIO
 link bin/fetch.elf   "${BASE[@]}" $FETCH $STRAWX $NETLIB obj/libbearssl.a
 link bin/netsurf.elf "${BASE[@]}" obj/libnetsurf.a $STRAWX $NETLIB obj/libbearssl.a
 link bin/discord.elf "${BASE[@]}" "${DISCORD[@]}" $STRAWX $NETLIB obj/libbearssl.a
-link bin/discord-voice.elf "${BASE[@]}" "${VOICE[@]}" $STRAWX $NETLIB obj/libbearssl.a obj/libopus.a
+link bin/discord-voice.elf "${BASE[@]}" "${VOICE[@]}" $STRAWX $NETLIB obj/libbearssl.a obj/libopus.a obj/libvpx.a
 link bin/lite-xl.elf "${BASE[@]}" obj/liblitexl.a obj/libfreetype.a obj/libpcre2.a $LUA $STRAWX
 link bin/classicube.elf "${BASE[@]}" obj/libclassicube.a $STRAWX
 for entry in "${APPS[@]}"; do

@@ -4,3 +4,6 @@ void __assert_fail(const char *expr, const char *file, unsigned int line, const 
 
 #define assert(expr) \
     ((void)((expr) || (__assert_fail(#expr, __FILE__, __LINE__, __func__), 0)))
+#if !defined(__cplusplus) && !defined(static_assert)
+#define static_assert _Static_assert
+#endif

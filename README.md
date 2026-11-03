@@ -26,7 +26,7 @@
 - **NetSurf**: web browser, ported to StrawX
 - **TinyCC**: compile C programs
 - **Lite XL**: code editor with split panes and drag-and-drop tabs, ported to StrawX and Lua 5.5
-- **Discord**: an experimental client, with voice chat, screen sharing and stream watching in servers and DM calls (Opus and a built-in VP8 encoder and decoder, end-to-end encrypted with DAVE)
+- **Discord**: an experimental client, with voice chat, screen sharing and stream watching in servers and DM calls (Opus, VP8 and VP9 via libvpx, end-to-end encrypted with DAVE)
 - **ClassiCube**: Minecraft Classic client with singleplayer and multiplayer, ported to StrawX (software renderer)
 - `fetch`: a command-line HTTP(S) downloader
 - `audio`: play tones and WAV files, record from the microphone, set the volume
@@ -78,6 +78,10 @@ StrawOS bundles these projects as git submodules:
 [Lite XL](https://github.com/lite-xl/lite-xl),
 [FreeType](https://freetype.org/),
 [PCRE2](https://github.com/PCRE2Project/pcre2),
-[stb](https://github.com/nothings/stb) and
-[TinyCC](https://repo.or.cz/tinycc.git).
-Each one keeps its own license. Wallpaper credits are in `modules/root/pictures/CREDITS.txt`.
+[stb](https://github.com/nothings/stb),
+[TinyCC](https://repo.or.cz/tinycc.git),
+[ClassiCube](https://github.com/ClassiCube/ClassiCube),
+[Opus](https://opus-codec.org/) and
+[libvpx](https://chromium.googlesource.com/webm/libvpx).
+Each one keeps its own license; libvpx also comes with a patent grant (`modules/lib/libvpx/PATENTS`).
+Wallpaper credits are in `modules/root/pictures/CREDITS.txt`.

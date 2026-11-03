@@ -120,7 +120,7 @@ void watch_status(Watch *w, const char *msg)
     draw(w);
 }
 
-void watch_frame(Watch *w, const Vp8Image *img)
+void watch_frame(Watch *w, const VideoImage *img)
 {
     if (img->width != w->fw || img->height != w->fh || !w->frame)
     {
