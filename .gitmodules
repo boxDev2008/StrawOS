@@ -56,3 +56,6 @@
 [submodule "modules/lib/opus"]
 	path = modules/lib/opus
 	url = https://github.com/xiph/opus
+[submodule "modules/lib/libvpx"]
+	path = modules/lib/libvpx
+	url = https://chromium.googlesource.com/webm/libvpx
