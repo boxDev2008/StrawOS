@@ -1,6 +1,45 @@
---- a/Graphics_SoftGPU.c	2026-11-01 13:10:24.119339190 +0200
-+++ b/Graphics_SoftGPU.c	2026-11-01 13:12:53.904838261 +0200
-@@ -553,19 +553,50 @@
+--- a/Graphics_SoftGPU.c
++++ b/Graphics_SoftGPU.c
+@@ -5,6 +5,7 @@
+ #include "_GraphicsBase.h"
+ #include "Errors.h"
+ #include "Window.h"
++#include <emmintrin.h>
+ 
+ static cc_bool faceCulling;
+ static int fb_width, fb_height; 
+@@ -391,13 +392,29 @@
+ 	minX = max(minX, 0); maxX = min(maxX, fb_maxX);
+ 	minY = max(minY, 0); maxY = min(maxY, fb_maxY);
+ 
++	/* scaled sprites (most of the UI at larger sizes) step texX with an exact running */
++	/* quotient of delTX * (x - minX) / width, rather than dividing at every pixel      */
++	int stepTX = !fast && delTX >= 0 && width > 0;
++	int stepQ  = stepTX ? delTX / width : 0;
++	int stepR  = stepTX ? delTX % width : 0;
++
+ 	int x, y;
+ 	for (y = minY; y <= maxY; y++) 
+ 	{
+ 		int texY = fast ? (begTY + (y - minY)) : (((begTY + delTY * (y - minY) / height)) & texHeightMask);
++		int quot = 0, rem = 0;
+ 		for (x = minX; x <= maxX; x++) 
+ 		{
+-			int texX = fast ? (begTX + (x - minX)) : (((begTX + delTX * (x - minX) / width)) & texWidthMask);
++			int texX;
++			if (fast) {
++				texX = begTX + (x - minX);
++			} else if (stepTX) {
++				texX = (begTX + quot) & texWidthMask;
++				quot += stepQ; rem += stepR;
++				if (rem >= width) { rem -= width; quot++; }
++			} else {
++				texX = ((begTX + delTX * (x - minX) / width)) & texWidthMask;
++			}
+ 			int texIndex = texY * curTexWidth + texX;
+ 
+ 			BitmapCol color = curTexPixels[texIndex];
+@@ -553,19 +570,93 @@
  	b2 = BitmapCol_B(tColor); \
  	B  = ( b1 * b2 ) >> 8;    \
  
@@ -26,6 +65,49 @@
 +/* 0 when edge a->b owns the pixel centres lying exactly on it, -1 otherwise */
 +static CC_INLINE int EdgeBias(int ax, int ay, int bx, int by) {
 +	return (by > ay || (by == ay && bx < ax)) ? 0 : -1;
++}
++
++#define SPAN_RESYNC 8 /* in blocks of 4 pixels */
++
++/* Narrows [lo, hi] to the x where the edge value e(x) = e + d * (x - minX) is >= 0.  */
++/* Returns false when no x in it is.                                                  */
++static CC_INLINE cc_bool SpanLimit(cc_int64 e, cc_int64 d, int minX, int* lo, int* hi) {
++	cc_int64 k;
++	if (d == 0) return e >= 0;
++
++	if (d > 0) {
++		if (e >= 0) return true;
++		k = (-e + d - 1) / d; /* first step with e(x) >= 0 */
++		if (k > *hi - minX) return false;
++		if (minX + k > *lo) *lo = (int)(minX + k);
++	} else {
++		if (e < 0) return false;
++		k = e / -d;           /* last step with e(x) >= 0 */
++		if (k < *hi - minX) *hi = (int)(minX + k);
++	}
++	return true;
++}
++
++/* dst + ((A * (src - dst)) >> 8) per colour channel, A being src's alpha, for 4 pixels. */
++/* A * src and A * dst fit in 16 bits, and (P - Q) >> 8 = (P >> 8) - (Q >> 8) - borrow, */
++/* borrow being 1 when the low byte of P is below that of Q.                             */
++static CC_INLINE __m128i BlendHalf(__m128i src16, __m128i dst16) {
++	__m128i alpha = _mm_shufflehi_epi16(_mm_shufflelo_epi16(src16,
++		_MM_SHUFFLE(BITMAPCOLOR_A_SHIFT / 8, BITMAPCOLOR_A_SHIFT / 8, BITMAPCOLOR_A_SHIFT / 8, BITMAPCOLOR_A_SHIFT / 8)),
++		_MM_SHUFFLE(BITMAPCOLOR_A_SHIFT / 8, BITMAPCOLOR_A_SHIFT / 8, BITMAPCOLOR_A_SHIFT / 8, BITMAPCOLOR_A_SHIFT / 8));
++	__m128i byteMask = _mm_set1_epi16(0xFF);
++	__m128i P = _mm_mullo_epi16(alpha, src16);
++	__m128i Q = _mm_mullo_epi16(alpha, dst16);
++	__m128i borrow = _mm_cmpgt_epi16(_mm_and_si128(Q, byteMask), _mm_and_si128(P, byteMask)); /* -1 or 0 */
++	__m128i diff = _mm_add_epi16(_mm_sub_epi16(_mm_srli_epi16(P, 8), _mm_srli_epi16(Q, 8)), borrow);
++	return _mm_add_epi16(dst16, diff);
++}
++
++static CC_INLINE __m128i BlendPixels4(__m128i src, __m128i dst) {
++	__m128i zero = _mm_setzero_si128();
++	__m128i lo = BlendHalf(_mm_unpacklo_epi8(src, zero), _mm_unpacklo_epi8(dst, zero));
++	__m128i hi = BlendHalf(_mm_unpackhi_epi8(src, zero), _mm_unpackhi_epi8(dst, zero));
++	return _mm_packus_epi16(lo, hi);
 +}
 +
  static void DrawTriangle3D(Vertex* V0, Vertex* V1, Vertex* V2) {
@@ -57,7 +139,7 @@
  	}
  
  	// Reject triangles completely outside
-@@ -577,7 +608,7 @@
+@@ -577,7 +668,7 @@
  	minY = max(minY, 0); maxY = min(maxY, fb_maxY);
  
  	// NOTE: W in frag variables below is actually 1/W 
@@ -66,7 +148,7 @@
  	float w0 = V0->w, w1 = V1->w, w2 = V2->w;
  	
  	// TODO proper clipping
-@@ -593,13 +624,13 @@
+@@ -593,15 +684,26 @@
  	
  	// https://fgiesen.wordpress.com/2013/02/10/optimizing-the-basic-rasterizer/
  	// Essentially these are the deltas of edge functions between X/Y and X/Y + 1 (i.e. one X/Y step)
@@ -84,34 +166,195 @@
 +	cc_int64 bc0_start = EdgeAtCentre(x1,y1, x2,y2, minX,minY) + EdgeBias(x1,y1, x2,y2);
 +	cc_int64 bc1_start = EdgeAtCentre(x2,y2, x0,y0, minX,minY) + EdgeBias(x2,y2, x0,y0);
 +	cc_int64 bc2_start = EdgeAtCentre(x0,y0, x1,y1, minX,minY) + EdgeBias(x0,y0, x1,y1);
++
++	/* 1/w, z/w, u/w and v/w are linear in screen space, so they are planes: worked out */
++	/* in double from the exact edge values where each span starts, then stepped across */
++	/* it in float, 4 pixels at a time, and re-derived every SPAN_RESYNC blocks so float */
++	/* rounding cannot build up. (The edge bias shifts them by under 1/(2*area) of a     */
++	/* pixel step; ignored.)                                                             */
++	double ex0 = (double)dx12, ex1 = (double)dx20, ex2 = (double)dx01;
++	double iw_dx = (ex0 * w0 + ex1 * w1 + ex2 * w2) * factor;
++	double zw_dx = (ex0 * z0 + ex1 * z1 + ex2 * z2) * factor;
++	double uw_dx = (ex0 * u0 + ex1 * u1 + ex2 * u2) * factor;
++	double vw_dx = (ex0 * v0 + ex1 * v1 + ex2 * v2) * factor;
  
- 	int R, G, B, A, x, y;
+-	int R, G, B, A, x, y;
++	int R = 0, G = 0, B = 0, A = 0, x, y;
  	int a1, r1, g1, b1;
-@@ -624,16 +655,16 @@
+ 	int a2, r2, g2, b2;
+ 	cc_bool texturing = gfx_format == VERTEX_FORMAT_TEXTURED;
+@@ -622,60 +724,130 @@
+ 		texturing = false;
+ 	}
  
++	/* blocks of 4 pixels are loaded and stored whole, so must fit within a row */
++	if (fb_width < 4) return;
++
++	cc_bool depthTest = gfx_depthTest, depthWrite = gfx_depthWrite;
++	cc_bool alphaTest = gfx_alphaTest, alphaBlend = gfx_alphaBlend;
++	cc_bool colorWrite = colWrite;
++	BitmapCol* texPixels = curTexPixels;
++	int texWidth = curTexWidth;
++
++	const __m128i lane    = _mm_setr_epi32(0, 1, 2, 3);
++	const __m128  laneF   = _mm_setr_ps(0.0f, 1.0f, 2.0f, 3.0f);
++	const __m128  zeroF   = _mm_setzero_ps();
++	const __m128i zeroI   = _mm_setzero_si128();
++	const __m128i opaque  = _mm_set1_epi32((int)(0xFFu << BITMAPCOLOR_A_SHIFT));
++	const __m128i texWMask = _mm_set1_epi32(texWidthMask);
++	const __m128i texHMask = _mm_set1_epi32(texHeightMask);
++	const __m128  iwStep4 = _mm_set1_ps((float)(iw_dx * 4)), iwStep = _mm_set1_ps((float)iw_dx);
++	const __m128  zwStep4 = _mm_set1_ps((float)(zw_dx * 4)), zwStep = _mm_set1_ps((float)zw_dx);
++	const __m128  uwStep4 = _mm_set1_ps((float)(uw_dx * 4)), uwStep = _mm_set1_ps((float)uw_dx);
++	const __m128  vwStep4 = _mm_set1_ps((float)(vw_dx * 4)), vwStep = _mm_set1_ps((float)vw_dx);
++	/* the flat colour (untextured, or tinted single pixel texture) and the vertex tint, */
++	/* both as 16 bit channels of two pixels                                             */
++	__m128i flat16 = _mm_unpacklo_epi8(_mm_set1_epi32((int)BitmapCol_Make(R, G, B, A)), zeroI);
++	__m128i tint16 = _mm_unpacklo_epi8(_mm_set1_epi32((int)BitmapCol_Make(PackedCol_R(color),
++		PackedCol_G(color), PackedCol_B(color), PackedCol_A(color))), zeroI);
++	__m128i flat   = _mm_packus_epi16(flat16, flat16);
++
  	for (y = minY; y <= maxY; y++, bc0_start += dy12, bc1_start += dy20, bc2_start += dy01) 
  	{
 -		float bc0 = bc0_start;
 -		float bc1 = bc1_start;
 -		float bc2 = bc2_start;
-+		cc_int64 bc0 = bc0_start;
-+		cc_int64 bc1 = bc1_start;
-+		cc_int64 bc2 = bc2_start;
++		/* the pixels inside a triangle form one run per row, found exactly from the edges */
++		int lo = minX, hi = maxX;
++		if (!SpanLimit(bc0_start, dx12, minX, &lo, &hi)) continue;
++		if (!SpanLimit(bc1_start, dx20, minX, &lo, &hi)) continue;
++		if (!SpanLimit(bc2_start, dx01, minX, &lo, &hi)) continue;
++		if (lo > hi) continue;
++
++		/* attribute values at the centre of (lo, y) */
++		double c0 = (double)(bc0_start + dx12 * (lo - minX)) * factor;
++		double c1 = (double)(bc1_start + dx20 * (lo - minX)) * factor;
++		double c2 = (double)(bc2_start + dx01 * (lo - minX)) * factor;
++		double iwLo = c0 * w0 + c1 * w1 + c2 * w2;
++		double zwLo = c0 * z0 + c1 * z1 + c2 * z2;
++		double uwLo = c0 * u0 + c1 * u1 + c2 * u2;
++		double vwLo = c0 * v0 + c1 * v1 + c2 * v2;
++
++		float*     depthRow = depthBuffer + y * db_stride;
++		BitmapCol* colorRow = colorBuffer + y * cb_stride;
++		__m128 iw, zw, uw, vw;
++		__m128i hiV = _mm_set1_epi32(hi);
++		int resync = 0, prevX = -1;
  
- 		for (x = minX; x <= maxX; x++, bc0 += dx12, bc1 += dx20, bc2 += dx01) 
+-		for (x = minX; x <= maxX; x++, bc0 += dx12, bc1 += dx20, bc2 += dx01) 
++		for (x = lo; x <= hi; x += 4)
  		{
 -			float ic0 = bc0 * factor;
 -			float ic1 = bc1 * factor;
 -			float ic2 = bc2 * factor;
 -			if (ic0 < 0 || ic1 < 0 || ic2 < 0) continue;
-+			if ((bc0 | bc1 | bc2) < 0) continue;
-+			float ic0 = (float)(bc0 * factor);
-+			float ic1 = (float)(bc1 * factor);
-+			float ic2 = (float)(bc2 * factor);
- 			int db_index = y * db_stride + x;
+-			int db_index = y * db_stride + x;
++			/* the last block of a row is moved back to fit; lanes before x are masked off */
++			int bx = min(x, fb_width - 4);
++			if (--resync < 0 || bx != prevX + 4) {
++				double off = (double)(bx - lo);
++				iw = _mm_add_ps(_mm_set1_ps((float)(iwLo + iw_dx * off)), _mm_mul_ps(laneF, iwStep));
++				zw = _mm_add_ps(_mm_set1_ps((float)(zwLo + zw_dx * off)), _mm_mul_ps(laneF, zwStep));
++				uw = _mm_add_ps(_mm_set1_ps((float)(uwLo + uw_dx * off)), _mm_mul_ps(laneF, uwStep));
++				vw = _mm_add_ps(_mm_set1_ps((float)(vwLo + vw_dx * off)), _mm_mul_ps(laneF, vwStep));
++				resync = SPAN_RESYNC - 1;
++			} else {
++				iw = _mm_add_ps(iw, iwStep4); zw = _mm_add_ps(zw, zwStep4);
++				uw = _mm_add_ps(uw, uwStep4); vw = _mm_add_ps(vw, vwStep4);
++			}
++			prevX = bx;
  
- 			float w = 1 / (ic0 * w0 + ic1 * w1 + ic2 * w2);
-@@ -687,6 +718,11 @@
+-			float w = 1 / (ic0 * w0 + ic1 * w1 + ic2 * w2);
+-			float z = (ic0 * z0 + ic1 * z1 + ic2 * z2) * w;
++			/* lanes in [x, hi] */
++			__m128i px = _mm_add_epi32(_mm_set1_epi32(bx), lane);
++			__m128i inSpan = _mm_andnot_si128(_mm_or_si128(_mm_cmplt_epi32(px, _mm_set1_epi32(x)),
++				_mm_cmpgt_epi32(px, hiV)), _mm_set1_epi32(-1));
++			__m128 mask = _mm_castsi128_ps(inSpan);
++
++			__m128 w = _mm_div_ps(_mm_set1_ps(1.0f), iw);
++			__m128 z = _mm_mul_ps(zw, w);
++			__m128 depth = _mm_loadu_ps(depthRow + bx);
++
++			if (depthTest) {
++				__m128 fail = _mm_or_ps(_mm_cmplt_ps(z, zeroF), _mm_cmpgt_ps(z, depth));
++				mask = _mm_andnot_ps(fail, mask);
++			}
++			if (!_mm_movemask_ps(mask)) continue;
+ 
+-			if (gfx_depthTest && (z < 0 || z > depthBuffer[db_index])) continue;
+-			if (!colWrite) {
+-				if (gfx_depthWrite) depthBuffer[db_index] = z;
++			if (!colorWrite) {
++				if (depthWrite) _mm_storeu_ps(depthRow + bx, _mm_or_ps(_mm_and_ps(mask, z), _mm_andnot_ps(mask, depth)));
+ 				continue;
+ 			}
+ 
++			__m128i src;
+ 			if (texturing) {
+-				float u = (ic0 * u0 + ic1 * u1 + ic2 * u2) * w;
+-				float v = (ic0 * v0 + ic1 * v1 + ic2 * v2) * w;
+-				int texX = ((int)u) & texWidthMask;
+-				int texY = ((int)v) & texHeightMask;
+-
+-				int texIndex = texY * curTexWidth + texX;
+-				BitmapCol tColor = curTexPixels[texIndex];
+-
+-				MultiplyColors(color, tColor);
++				__m128i tx = _mm_and_si128(_mm_cvttps_epi32(_mm_mul_ps(uw, w)), texWMask);
++				__m128i ty = _mm_and_si128(_mm_cvttps_epi32(_mm_mul_ps(vw, w)), texHMask);
++				CC_ALIGNED(16) int txs[4], tys[4];
++				_mm_store_si128((__m128i*)txs, tx);
++				_mm_store_si128((__m128i*)tys, ty);
++				__m128i tex = _mm_setr_epi32(
++					(int)texPixels[tys[0] * texWidth + txs[0]], (int)texPixels[tys[1] * texWidth + txs[1]],
++					(int)texPixels[tys[2] * texWidth + txs[2]], (int)texPixels[tys[3] * texWidth + txs[3]]);
++
++				/* (tint * texel) >> 8 per channel */
++				__m128i lo16 = _mm_srli_epi16(_mm_mullo_epi16(_mm_unpacklo_epi8(tex, zeroI), tint16), 8);
++				__m128i hi16 = _mm_srli_epi16(_mm_mullo_epi16(_mm_unpackhi_epi8(tex, zeroI), tint16), 8);
++				src = _mm_packus_epi16(lo16, hi16);
++			} else {
++				src = flat;
+ 			}
+ 
+-			if (gfx_alphaTest && A < 0x80) continue;
+-			if (gfx_depthWrite) depthBuffer[db_index] = z;
+-			int cb_index = y * cb_stride + x;
+-			
+-			if (!gfx_alphaBlend) {
+-				colorBuffer[cb_index] = BitmapCol_Make(R, G, B, 0xFF);
+-				continue;
++			if (alphaTest) {
++				__m128i alpha = _mm_srli_epi32(_mm_slli_epi32(src, 24 - BITMAPCOLOR_A_SHIFT), 24);
++				mask = _mm_and_ps(mask, _mm_castsi128_ps(_mm_cmpgt_epi32(alpha, _mm_set1_epi32(0x7F))));
++				if (!_mm_movemask_ps(mask)) continue;
+ 			}
++			if (depthWrite) _mm_storeu_ps(depthRow + bx, _mm_or_ps(_mm_and_ps(mask, z), _mm_andnot_ps(mask, depth)));
+ 
+-			BitmapCol dst = colorBuffer[cb_index];
+-			int dstR = BitmapCol_R(dst);
+-			int dstG = BitmapCol_G(dst);
+-			int dstB = BitmapCol_B(dst);
+-
+-			// int finR = (R * A + dstR * (255 - A)) >> 8;
+-			int finR = dstR + ((A * (R - dstR)) >> 8);
+-			int finG = dstG + ((A * (G - dstG)) >> 8);
+-			int finB = dstB + ((A * (B - dstB)) >> 8);
+-			colorBuffer[cb_index] = BitmapCol_Make(finR, finG, finB, 0xFF);
++			__m128i dst = _mm_loadu_si128((__m128i*)(colorRow + bx));
++			__m128i out;
++			if (!alphaBlend) {
++				out = _mm_or_si128(src, opaque);
++			} else {
++				out = _mm_or_si128(BlendPixels4(src, dst), opaque);
++			}
++			__m128i m = _mm_castps_si128(mask);
++			_mm_storeu_si128((__m128i*)(colorRow + bx), _mm_or_si128(_mm_and_si128(m, out), _mm_andnot_si128(m, dst)));
+ 		}
+ 	}
+ }
+@@ -687,6 +859,11 @@
  
  // https://github.com/behindthepixels/EDXRaster/blob/master/EDXRaster/Core/Clipper.h
  static void ClipLine(Vertex* v1, Vertex* v2, Vertex* V) {
@@ -123,7 +366,7 @@
  	float t  = Math_AbsF(v1->z / (v2->z - v1->z));
  	float invt = 1.0f - t;
  	
-@@ -698,7 +734,7 @@
+@@ -698,7 +875,7 @@
  	
  	V->u = invt * v1->u + t * v2->u;
  	V->v = invt * v1->v + t * v2->v;
