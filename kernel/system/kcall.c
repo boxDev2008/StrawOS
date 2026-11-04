@@ -7,7 +7,12 @@ ALWAYS_INLINE bool kcall_enter(void)
     uint64_t flags = irq_save();
     bool took_lock = !bkl_held();
     if (took_lock)
+    {
         bkl_lock();
+        Task *t = task_current();
+        if (t)
+            t->in_kcall = true;
+    }
     irq_restore(flags);
     return took_lock;
 }
@@ -17,6 +22,13 @@ ALWAYS_INLINE void kcall_leave(bool took_lock)
     if (took_lock)
     {
         uint64_t flags = irq_save();
+        Task *t = task_current();
+        if (t)
+        {
+            t->in_kcall = false;
+            if (t->resched_pending)
+                task_yield();
+        }
         task_check_kill();
         bkl_unlock();
         irq_restore(flags);
@@ -54,7 +66,9 @@ ALWAYS_INLINE void kcall_leave(bool took_lock)
     X(KCALL_UPTIME,     task_uptime_ms)    \
     X(KCALL_YIELD,      task_yield)        \
     X(KCALL_RENAME,     fs_sys_rename)     \
-    X(KCALL_DUP2,      fs_sys_dup2)
+    X(KCALL_DUP2,       fs_sys_dup2)       \
+    X(KCALL_MOUNT,      fs_sys_mount)      \
+    X(KCALL_UNMOUNT,    fs_sys_unmount)
 
 #define KCALL_WRAPPER(num, fn)                                                  \
     static uint64_t kcall_##fn(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) \

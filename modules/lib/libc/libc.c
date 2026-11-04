@@ -32,6 +32,7 @@
 #include "include/sys/select.h"
 #include "include/sys/utsname.h"
 #include "include/arpa/inet.h"
+#include "include/disk.h"
 
 #include "include/kcall.h"
 
@@ -51,3 +52,4 @@
 #include "src/time.c"
 #include "src/net.c"
 #include "src/posix_compat.c"
+#include "src/disk.c"

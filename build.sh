@@ -37,8 +37,11 @@ mkdir -p build/iso/EFI/BOOT
 cp limine/BOOTX64.EFI build/iso/EFI/BOOT/
 cp limine.conf build/iso/boot/limine.conf
 
-mkdir -p build/root/bin
+mkdir -p build/root/bin build/root/EFI/BOOT
 cp -r modules/root/. build/root/
+cp build/iso/boot/kernel.elf build/root/boot/
+cp limine/limine-bios.sys build/root/boot/
+cp limine/BOOTX64.EFI build/root/EFI/BOOT/
 cp modules/bin/*.elf build/root/bin/
 cp -r modules/obj/tcc-sysroot/. build/root/
 mkdir -p build/root/share/netsurf build/root/share/fonts
@@ -61,11 +64,12 @@ xorriso -as mkisofs \
     -no-emul-boot \
     -boot-load-size 4 \
     -boot-info-table \
-    -eltorito-alt-boot \
-    -e boot/limine-uefi-cd.bin \
-    -no-emul-boot \
-    -append_partition 2 0xef limine/limine-uefi-cd.bin \
+    --efi-boot boot/limine-uefi-cd.bin \
+    -efi-boot-part \
+    --efi-boot-image \
+    --protective-msdos-label \
     build/iso \
     -o strawos-x86_64.iso
 
-# limine bios-install strawos-x86_64.iso
+cc -O2 -std=c99 limine/limine.c -o build/limine
+build/limine bios-install strawos-x86_64.iso

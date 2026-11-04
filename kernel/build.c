@@ -70,6 +70,8 @@ static struct limine_framebuffer *limine_framebuffer;
 #include "filesystem/vfs.h"
 #include "filesystem/ramfs.h"
 #include "filesystem/devfs.h"
+#include "drivers/disk/block.h"
+#include "filesystem/fat32.h"
 #include "net/net.h"
 
 #include "elf.h"
@@ -113,26 +115,32 @@ static struct limine_framebuffer *limine_framebuffer;
 
 #include "devices/ps2mouse.c"
 
-#include "drivers/pci.h"
-#include "drivers/pci.c"
+#include "drivers/bus/pci.h"
+#include "drivers/bus/pci.c"
 
-#include "drivers/usb_hid.h"
-#include "drivers/usb_hid.c"
+#include "drivers/usb/usb_hid.h"
+#include "drivers/usb/usb_hid.c"
 
-#include "drivers/xhci.h"
-#include "drivers/xhci.c"
+#include "drivers/usb/xhci.h"
+#include "drivers/usb/xhci.c"
 
-#include "drivers/rtl8139.h"
-#include "drivers/rtl8139.c"
+#include "drivers/net/rtl8139.h"
+#include "drivers/net/rtl8139.c"
 
-#include "drivers/rtl8169.h"
-#include "drivers/rtl8169.c"
+#include "drivers/net/rtl8169.h"
+#include "drivers/net/rtl8169.c"
 
-#include "drivers/nic.h"
-#include "drivers/nic.c"
+#include "drivers/net/nic.h"
+#include "drivers/net/nic.c"
 
-#include "drivers/hda.h"
-#include "drivers/hda.c"
+#include "drivers/audio/hda.h"
+#include "drivers/audio/hda.c"
+
+#include "drivers/disk/block.c"
+#include "drivers/disk/ata.c"
+#include "drivers/disk/ahci.c"
+#include "drivers/disk/nvme.c"
+#include "filesystem/fat32.c"
 
 #include "net/net.c"
 #include "net/inet.c"

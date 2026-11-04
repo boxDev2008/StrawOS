@@ -11,6 +11,10 @@ VNode *vfs_root(void)
 int vfs_mount(const char *path, VNode *fs_root)
 {
     for (int i = 0; i < VFS_MAX_MOUNTS; i++)
+        if (mounts[i].used && strcmp(mounts[i].path, path) == 0)
+            return -1;
+
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++)
     {
         if (!mounts[i].used)
         {
@@ -25,6 +29,21 @@ int vfs_mount(const char *path, VNode *fs_root)
         }
     }
     return -1;
+}
+
+VNode *vfs_unmount(const char *path)
+{
+    if (strcmp(path, "/") == 0)
+        return NULL;
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++)
+    {
+        if (mounts[i].used && strcmp(mounts[i].path, path) == 0)
+        {
+            mounts[i].used = false;
+            return mounts[i].root;
+        }
+    }
+    return NULL;
 }
 
 static VfsMount *find_mount_for(const char *path, const char **remainder_out)
@@ -183,6 +202,8 @@ int vfs_open(const char *path, uint32_t flags, VFile *file_out)
             return rc;
     }
 
+    if (!node->file_ops)
+        node->open_count++;
     return 0;
 }
 
@@ -240,9 +261,15 @@ int vfs_close(VFile *file)
     if (!file || !file->node)
         return -1;
 
-    if (file->node->file_ops && file->node->file_ops->close)
-        return file->node->file_ops->close(file);
+    VNode *node = file->node;
+    if (node->file_ops)
+        return node->file_ops->close ? node->file_ops->close(file) : 0;
 
+    file->node = NULL;
+    if (node->open_count)
+        node->open_count--;
+    if (!node->open_count && node->unlinked && node->ops && node->ops->release)
+        node->ops->release(node);
     return 0;
 }
 

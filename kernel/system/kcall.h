@@ -37,3 +37,5 @@
 #define KCALL_YIELD      29
 #define KCALL_RENAME     30
 #define KCALL_DUP2       31
+#define KCALL_MOUNT      32
+#define KCALL_UNMOUNT    33

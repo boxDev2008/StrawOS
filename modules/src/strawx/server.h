@@ -242,6 +242,7 @@ static struct
     int           desktop_selected;
     int           desktop_hover;
     int           last_minute;
+    bool          settings_pending;
 
     bool          animations;
     bool          anim_busy;

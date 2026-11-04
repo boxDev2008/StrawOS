@@ -242,10 +242,7 @@ static void client_handle(Client *c, const SxMsgHeader *hdr)
             break;
 
         case SX_REQ_RELOAD_SETTINGS:
-            settings_load();
-            S.desktop_selected = -1;
-            S.desktop_hover = -1;
-            damage_all();
+            S.settings_pending = true;
             break;
 
         case SX_REQ_CLIPBOARD_SET:

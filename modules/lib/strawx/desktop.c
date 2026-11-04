@@ -36,6 +36,7 @@ bool sx_desktop_entry_load(const char *path, SxDesktopEntry *out)
     buf[len] = '\0';
 
     bool in_entry = false;
+    bool live_only = false;
     char *line = buf;
     while (line && *line)
     {
@@ -68,10 +69,19 @@ bool sx_desktop_entry_load(const char *path, SxDesktopEntry *out)
                     sx_copy_trimmed(out->icon, sizeof(out->icon), value, vlen);
                 else if (strcmp(key, "Exec") == 0)
                     sx_copy_trimmed(out->exec, sizeof(out->exec), value, vlen);
+                else if (strcmp(key, "LiveOnly") == 0)
+                    live_only = value[0] == 't' || value[0] == '1';
             }
         }
 
         line = next ? next + 1 : NULL;
+    }
+
+    if (live_only)
+    {
+        struct stat st;
+        if (stat("/dev/live", &st) != 0)
+            return false;
     }
 
     return out->name[0] && out->exec[0];

@@ -119,9 +119,9 @@ for dep in net json util; do
 done
 
 APPS=()
-for app in files notes paint calc clock sysmon cube viewer settings terminal; do
+for app in files notes paint calc clock sysmon cube viewer settings terminal installer; do
     if [ -f src/apps/$app.c ]; then
-        compile src/apps/$app.c
+        compile src/apps/$app.c $([ $app = installer ] && echo -I../limine)
         APPS+=("$app:$OUT")
     fi
 done

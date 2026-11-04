@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Install StrawOS
+Comment=Install StrawOS to a disk
+Icon=/share/icons/strawos.png
+Exec=/bin/installer.elf
+LiveOnly=true

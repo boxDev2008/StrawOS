@@ -149,6 +149,18 @@ static int ramfs_rename(VNode *node, VNode *new_dir, const char *new_name)
     return 0;
 }
 
+static void ramfs_release(VNode *node)
+{
+    if (node->type == VNODE_FILE && node->private_data)
+    {
+        RamfsFile *rf = (RamfsFile *)node->private_data;
+        if (rf->data)
+            kfree(rf->data);
+        kfree(rf);
+    }
+    kfree(node);
+}
+
 static int ramfs_unlink(VNode *dir, const char *name)
 {
     VNode *prev = NULL;
@@ -173,15 +185,12 @@ static int ramfs_unlink(VNode *dir, const char *name)
     else
         dir->first_child = cur->next_sibling;
 
-    if (cur->type == VNODE_FILE && cur->private_data)
-    {
-        RamfsFile *rf = (RamfsFile *)cur->private_data;
-        if (rf->data)
-            kfree(rf->data);
-        kfree(rf);
-    }
-
-    kfree(cur);
+    cur->parent = NULL;
+    cur->next_sibling = NULL;
+    if (cur->open_count)
+        cur->unlinked = true;
+    else
+        ramfs_release(cur);
     return 0;
 }
 
@@ -195,6 +204,7 @@ VNode *ramfs_create_root(void)
     ramfs_ops.readdir = ramfs_readdir;
     ramfs_ops.unlink  = ramfs_unlink;
     ramfs_ops.rename  = ramfs_rename;
+    ramfs_ops.release = ramfs_release;
 
     VNode *root = (VNode *)kmalloc(sizeof(VNode));
     if (!root)
@@ -395,4 +405,22 @@ int ramfs_load_limine_modules(void)
     }
 
     return loaded;
+}
+bool ramfs_has_boot_image(void)
+{
+    struct limine_module_response *resp = module_request.response;
+    if (!resp)
+        return false;
+
+    for (uint64_t i = 0; i < resp->module_count; i++)
+    {
+        struct limine_file *mod = resp->modules[i];
+        if (!mod || !mod->path)
+            continue;
+        const char *base = basename_of(mod->path);
+        size_t len = strlen(base);
+        if (len > 4 && strcmp(base + len - 4, ".tar") == 0)
+            return true;
+    }
+    return false;
 }

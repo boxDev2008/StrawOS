@@ -366,6 +366,7 @@ static void schedule(TaskState prev_state)
         next = (prev != cpu->idle && prev->state == TASK_READY) ? prev : cpu->idle;
 
     next->state = TASK_RUNNING;
+    prev->resched_pending = false;
     if (next == prev)
         return;
 
@@ -414,8 +415,14 @@ void task_scheduler_tick(void)
         wake_sleepers(g_tick_count);
     }
 
-    if (!task_current())
+    Task *t = task_current();
+    if (!t)
         return;
+    if (t->in_kcall)
+    {
+        t->resched_pending = true;
+        return;
+    }
 
     schedule(TASK_READY);
 }

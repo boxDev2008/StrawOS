@@ -30,17 +30,51 @@ void scheduler_timer_init(void)
     lapic_timer_init(SCHEDULER_HZ);
 }
 
+static VNode *disk_root_find(void)
+{
+    for (int i = 0; i < BLOCK_MAX_DEVICES; i++)
+    {
+        BlockDevice *dev = block_get(i);
+        if (!dev || dev->sectors == 0 || !fat32_has_label(dev, "STRAWOS"))
+            continue;
+        VNode *root = fat32_mount(dev);
+        if (root)
+        {
+            kprintf("vfs: using %s as the root filesystem\n", dev->name);
+            return root;
+        }
+    }
+    return NULL;
+}
+
+static ssize_t live_read(VFile *file, void *buf, size_t count)
+{
+    (void)file; (void)buf; (void)count;
+    return 0;
+}
+
 static void filesystems_init(void)
 {
-    VNode *ramfs_root = ramfs_create_root();
-    if (!ramfs_root)
+    bool live = ramfs_has_boot_image();
+    VNode *root = live ? NULL : disk_root_find();
+
+    if (!root)
     {
-        kprintf("vfs: failed to create ramfs root\n");
-        panic();
+        live = true;
+        root = ramfs_create_root();
+        if (!root)
+        {
+            kprintf("vfs: failed to create ramfs root\n");
+            panic();
+        }
+        vfs_mount("/", root);
+        int n = ramfs_load_limine_modules();
+        kprintf("vfs: loaded %d boot module(s)\n", n);
     }
-    vfs_mount("/", ramfs_root);
-    int n = ramfs_load_limine_modules();
-    kprintf("vfs: loaded %d boot module(s)\n", n);
+    else
+    {
+        vfs_mount("/", root);
+    }
 
     VNode *devfs_root = devfs_create_root();
     if (!devfs_root)
@@ -50,6 +84,14 @@ static void filesystems_init(void)
     }
     vfs_mkdir("/dev");
     vfs_mount("/dev", devfs_root);
+    block_publish_all();
+
+    if (live)
+    {
+        static VFileOps live_ops;
+        live_ops.read = live_read;
+        devfs_register("live", &live_ops, NULL);
+    }
 }
 
 void kmain(void)
@@ -74,6 +116,11 @@ void kmain(void)
 
     pmm_init();
     kprintf("PMM Initialized\n");
+
+    block_init();
+    nvme_init();
+    ahci_init();
+    ata_init();
 
     filesystems_init();
     fs_kcalls_init();

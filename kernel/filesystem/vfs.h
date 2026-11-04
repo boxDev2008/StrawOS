@@ -48,6 +48,7 @@ typedef struct
     int (*readdir)(VNode *dir, int i, char *name_out);
     int (*unlink)(VNode *dir, const char *name);
     int (*rename)(VNode *node, VNode *new_dir, const char *new_name);
+    void (*release)(VNode *node);
 }
 VNodeOps;
 
@@ -61,6 +62,9 @@ struct VNode
     VFileOps  *file_ops;
 
     void      *private_data;
+
+    uint32_t   open_count;
+    bool       unlinked;
 
     VNode     *parent;
     VNode     *first_child;
@@ -95,9 +99,8 @@ typedef struct
 }
 VfsStat;
 
-void  vfs_init(void);
-
 int   vfs_mount(const char *path, VNode *root);
+VNode *vfs_unmount(const char *path);
 
 VNode *vfs_resolve(const char *path);
 

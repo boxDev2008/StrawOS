@@ -250,6 +250,15 @@ int main(void)
                 client_disconnect(c);
         }
 
+        if (S.settings_pending)
+        {
+            S.settings_pending = false;
+            settings_load();
+            S.desktop_selected = -1;
+            S.desktop_hover = -1;
+            damage_all();
+        }
+
         shell_tick();
         anim_tick();
         pointer_grab_update();

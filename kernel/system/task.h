@@ -46,6 +46,8 @@ struct Task
     int        exit_code;
     bool       detached;
     bool       kill_pending;
+    bool       in_kcall;
+    bool       resched_pending;
 
     uint64_t   cpu_ticks;
 

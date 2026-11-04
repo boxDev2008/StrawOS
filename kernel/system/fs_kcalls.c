@@ -309,3 +309,47 @@ int64_t fs_sys_poll(PollFd *fds, uint64_t count, int64_t timeout_ms)
         irq_restore(flags);
     }
 }
+
+int64_t fs_sys_mount(const char *device, const char *path)
+{
+    if (!device || !path || path[0] != '/' || strlen(path) >= VFS_NAME_MAX)
+        return -1;
+
+    BlockDevice *dev = block_from_node(vfs_resolve(device));
+    if (!dev)
+        return -1;
+
+    VNode *root = fat32_mount(dev);
+    if (!root)
+        return -1;
+
+    if (vfs_mount(path, root) != 0)
+    {
+        fat32_unmount(root);
+        return -1;
+    }
+    return 0;
+}
+
+int64_t fs_sys_unmount(const char *path)
+{
+    if (!path)
+        return -1;
+
+    VNode *root = vfs_unmount(path);
+    if (!root)
+        return -1;
+
+    for (int i = 3; i < FD_MAX; i++)
+    {
+        if (fd_table[i].used && fat32_owns(root, fd_table[i].file.node))
+        {
+            vfs_mount(path, root);
+            return -1;
+        }
+    }
+
+    if (fat32_is_root(root))
+        return fat32_unmount(root);
+    return 0;
+}
