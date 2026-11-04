@@ -15,6 +15,23 @@ static void send_event(Window *w, uint16_t type, const SxEvtMsg *proto)
     send_raw(w->client, &msg, sizeof(msg));
 }
 
+// Doubles the client slots. Stops early if memory runs out; client_cap counts only the slots that exist.
+static void client_slots_grow(void)
+{
+    int cap = S.client_cap ? S.client_cap * 2 : 16;
+    Client **clients = realloc(S.clients, (size_t)cap * sizeof(*clients));
+    if (!clients)
+        return;
+    S.clients = clients;
+    while (S.client_cap < cap)
+    {
+        Client *c = calloc(1, sizeof(Client));
+        if (!c)
+            return;
+        S.clients[S.client_cap++] = c;
+    }
+}
+
 static void client_accept(void)
 {
     for (;;)
@@ -24,9 +41,17 @@ static void client_accept(void)
             return;
 
         Client *c = NULL;
-        for (int i = 0; i < MAX_CLIENTS && !c; i++)
-            if (!S.clients[i].used)
-                c = &S.clients[i];
+        for (int i = 0; i < S.client_cap && !c; i++)
+            if (!S.clients[i]->used)
+                c = S.clients[i];
+
+        if (!c)
+        {
+            int old = S.client_cap;
+            client_slots_grow();
+            if (S.client_cap > old)
+                c = S.clients[old];
+        }
 
         if (!c)
         {
@@ -60,9 +85,9 @@ static void client_identify(Client *c, uint64_t pid)
 
 static void client_disconnect(Client *c)
 {
-    for (int i = 0; i < MAX_WINDOWS; i++)
-        if (S.windows[i].used && S.windows[i].client == c)
-            window_destroy(&S.windows[i]);
+    for (int i = 0; i < S.window_cap; i++)
+        if (S.windows[i]->used && S.windows[i]->client == c)
+            window_destroy(S.windows[i]);
 
     close(c->fd);
     c->used = false;

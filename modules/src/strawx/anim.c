@@ -445,9 +445,9 @@ static SxRect fade_rect(FadeKind kind, int64_t key)
     switch (kind)
     {
         case FADE_TITLE:
-            for (int i = 0; i < MAX_WINDOWS; i++)
+            for (int i = 0; i < S.window_cap; i++)
             {
-                Window *w = &S.windows[i];
+                Window *w = S.windows[i];
                 if (w->used && w->id == (uint32_t)(key >> 4) && window_visible(w))
                     return titlebar_button_rect(w, (HitZone)(key & 0xF));
             }

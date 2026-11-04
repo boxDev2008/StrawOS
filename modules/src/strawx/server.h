@@ -1,5 +1,3 @@
-#define MAX_CLIENTS   32
-#define MAX_WINDOWS   64
 #define MAX_DAMAGE    32
 #define CLIENT_RX_MAX 8192
 
@@ -188,9 +186,12 @@ static struct
     int           listen_fd;
     int           kbd_fd;
     int           mouse_fd;
-    Client        clients[MAX_CLIENTS];
-    Window        windows[MAX_WINDOWS];
-    Window       *zorder[MAX_WINDOWS];
+    // Slots grow on demand; each Client/Window is its own allocation so pointers to it stay valid.
+    Client      **clients;
+    int           client_cap;
+    Window      **windows;
+    int           window_cap;
+    Window      **zorder;        // always holds at least window_cap entries
     int           zcount;
     uint32_t      next_window_id;
     uint32_t      next_client_id;

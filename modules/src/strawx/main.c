@@ -33,9 +33,9 @@ static void broadcast_theme_changed(void)
     memset(&ev, 0, sizeof(ev));
     ev.hdr.type = SX_EVT_THEME_CHANGED;
     ev.hdr.size = sizeof(ev);
-    for (int i = 0; i < MAX_CLIENTS; i++)
-        if (S.clients[i].used)
-            send_raw(&S.clients[i], &ev, sizeof(ev));
+    for (int i = 0; i < S.client_cap; i++)
+        if (S.clients[i]->used)
+            send_raw(S.clients[i], &ev, sizeof(ev));
 }
 
 static void audio_select(int fd, const struct audio_device_list *list, const char *key, bool input)
@@ -216,22 +216,21 @@ int main(void)
     damage_all();
     compose();
 
-    struct pollfd pfds[3 + MAX_CLIENTS];
-    Client *pfd_client[3 + MAX_CLIENTS];
-
     for (;;)
     {
+        struct pollfd pfds[3 + S.client_cap];
+        Client *pfd_client[3 + S.client_cap];
         int n = 0;
         pfds[n].fd = S.listen_fd; pfds[n].events = POLLIN; pfd_client[n++] = NULL;
         pfds[n].fd = S.kbd_fd;    pfds[n].events = POLLIN; pfd_client[n++] = NULL;
         pfds[n].fd = S.mouse_fd;  pfds[n].events = POLLIN; pfd_client[n++] = NULL;
-        for (int i = 0; i < MAX_CLIENTS; i++)
+        for (int i = 0; i < S.client_cap; i++)
         {
-            if (!S.clients[i].used)
+            if (!S.clients[i]->used)
                 continue;
-            pfds[n].fd = S.clients[i].fd;
+            pfds[n].fd = S.clients[i]->fd;
             pfds[n].events = POLLIN;
-            pfd_client[n++] = &S.clients[i];
+            pfd_client[n++] = S.clients[i];
         }
 
         poll(pfds, (uint64_t)n, S.anim_busy ? ANIM_FRAME_MS : 1000);

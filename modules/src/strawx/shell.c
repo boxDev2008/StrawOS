@@ -199,9 +199,9 @@ static bool window_listed(Window *w)
 static int app_windows(int app, Window **out)
 {
     int n = 0;
-    for (int i = 0; i < MAX_WINDOWS; i++)
+    for (int i = 0; i < S.window_cap; i++)
     {
-        Window *w = &S.windows[i];
+        Window *w = S.windows[i];
         if (window_listed(w) && app_for_window(w) == app)
             out[n++] = w;
     }
@@ -360,8 +360,8 @@ static int bar_hit(int x, int y)
 
 static bool workspace_occupied(int ws)
 {
-    for (int i = 0; i < MAX_WINDOWS; i++)
-        if (window_listed(&S.windows[i]) && S.windows[i].workspace == ws)
+    for (int i = 0; i < S.window_cap; i++)
+        if (window_listed(S.windows[i]) && S.windows[i]->workspace == ws)
             return true;
     return false;
 }
@@ -468,11 +468,11 @@ static int dock_items(DockItem *out)
     for (int i = 0; i < shell_app_count; i++)
         out[n++] = (DockItem){ i, NULL };
 
-    Window *extra[MAX_WINDOWS];
+    Window *extra[S.window_cap + 1];
     int e = 0;
-    for (int i = 0; i < MAX_WINDOWS; i++)
-        if (window_listed(&S.windows[i]) && app_for_window(&S.windows[i]) < 0)
-            extra[e++] = &S.windows[i];
+    for (int i = 0; i < S.window_cap; i++)
+        if (window_listed(S.windows[i]) && app_for_window(S.windows[i]) < 0)
+            extra[e++] = S.windows[i];
     for (int i = 1; i < e; i++)
     {
         Window *k = extra[i];
@@ -491,7 +491,7 @@ static int dock_items(DockItem *out)
 
 static SxRect dock_base_rect(void)
 {
-    DockItem items[MAX_APPS + MAX_WINDOWS];
+    DockItem items[MAX_APPS + S.window_cap];
     int n = dock_items(items);
     int w = n * DOCK_ICON + (n > 0 ? n - 1 : 0) * DOCK_GAP + DOCK_PAD * 2;
     if (n > shell_app_count && shell_app_count > 0)
@@ -539,7 +539,7 @@ static SxRect dock_tip_rect(int i, const char *label)
 
 static SxRect dock_fade_rect(int i)
 {
-    DockItem items[MAX_APPS + MAX_WINDOWS];
+    DockItem items[MAX_APPS + S.window_cap];
     int n = dock_items(items);
     if (i < 0 || i >= n)
         return sx_rect(0, 0, 0, 0);
@@ -553,7 +553,7 @@ static int dock_hit(int x, int y)
 {
     if (S.dock_level < 0.9f)
         return -1;
-    DockItem items[MAX_APPS + MAX_WINDOWS];
+    DockItem items[MAX_APPS + S.window_cap];
     int n = dock_items(items);
     SxRect d = dock_rect();
     for (int i = 0; i < n; i++)
@@ -598,7 +598,7 @@ static void shell_draw_dock(SxCanvas *c)
     sx_fill_rounded_rect(c, d.x, d.y, d.w, d.h, DOCK_RADIUS, DOCK_BG);
     sx_draw_rounded_rect(c, d.x, d.y, d.w, d.h, DOCK_RADIUS, SX_RGBA(255, 255, 255, 30));
 
-    DockItem items[MAX_APPS + MAX_WINDOWS];
+    DockItem items[MAX_APPS + S.window_cap];
     int n = dock_items(items);
     Window *focused_win = S.focused && window_listed(S.focused) ? S.focused : NULL;
     int focused_app = focused_win ? app_for_window(focused_win) : -1;
@@ -624,7 +624,7 @@ static void shell_draw_dock(SxCanvas *c)
         else
             draw_app_icon(c, shell_apps[it->app].entry.name, shell_apps[it->app].icon_dock, r.x, r.y - lift, DOCK_ICON);
 
-        Window *wins[MAX_WINDOWS];
+        Window *wins[S.window_cap + 1];
         int count = it->win ? 1 : app_windows(it->app, wins);
         bool hot = it->win ? it->win == focused_win : (focused_app >= 0 && it->app == focused_app);
         if (count > 3)
@@ -661,12 +661,12 @@ static void shell_activate_window(Window *w)
 
 static void shell_dock_click(int index)
 {
-    DockItem items[MAX_APPS + MAX_WINDOWS];
+    DockItem items[MAX_APPS + S.window_cap];
     int n = dock_items(items);
     if (index < 0 || index >= n)
         return;
 
-    Window *wins[MAX_WINDOWS];
+    Window *wins[S.window_cap + 1];
     int count;
     if (items[index].win)
     {
@@ -706,7 +706,7 @@ static void shell_dock_click(int index)
 // Where a window minimizes to: its icon in the dock.
 static SxRect dock_target_for(Window *w)
 {
-    DockItem items[MAX_APPS + MAX_WINDOWS];
+    DockItem items[MAX_APPS + S.window_cap];
     int n = dock_items(items);
     int app = app_for_window(w);
     for (int i = 0; i < n; i++)

@@ -75,7 +75,7 @@ static void window_move_to_workspace(Window *w, int ws)
 
 static void focus_neighbour(int dir)
 {
-    Window *list[MAX_WINDOWS];
+    Window *list[S.zcount + 1];
     int n = 0;
     for (int i = 0; i < S.zcount; i++)
         if (window_visible(S.zorder[i]) && window_has_frame(S.zorder[i]))

@@ -1,8 +1,8 @@
 static Window *window_by_id(Client *client, uint32_t id)
 {
-    for (int i = 0; i < MAX_WINDOWS; i++)
+    for (int i = 0; i < S.window_cap; i++)
     {
-        Window *w = &S.windows[i];
+        Window *w = S.windows[i];
         if (w->used && w->id == id && w->client == client)
             return w;
     }
@@ -70,14 +70,41 @@ static void window_raise(Window *w)
     damage_window(w);
 }
 
+// Doubles the window slots. zorder is grown first so it never has fewer entries than window_cap.
+static void window_slots_grow(void)
+{
+    int cap = S.window_cap ? S.window_cap * 2 : 16;
+    Window **zorder = realloc(S.zorder, (size_t)cap * sizeof(*zorder));
+    if (!zorder)
+        return;
+    S.zorder = zorder;
+    Window **windows = realloc(S.windows, (size_t)cap * sizeof(*windows));
+    if (!windows)
+        return;
+    S.windows = windows;
+    while (S.window_cap < cap)
+    {
+        Window *w = calloc(1, sizeof(Window));
+        if (!w)
+            return;
+        S.windows[S.window_cap++] = w;
+    }
+}
+
 static Window *window_create(Client *client, const SxReqCreateWindow *req)
 {
     Window *w = NULL;
-    for (int i = 0; i < MAX_WINDOWS && !w; i++)
-        if (!S.windows[i].used)
-            w = &S.windows[i];
+    for (int i = 0; i < S.window_cap && !w; i++)
+        if (!S.windows[i]->used)
+            w = S.windows[i];
     if (!w)
-        return NULL;
+    {
+        int old = S.window_cap;
+        window_slots_grow();
+        if (S.window_cap == old)
+            return NULL;
+        w = S.windows[old];
+    }
 
     memset(w, 0, sizeof(*w));
     w->used = true;
