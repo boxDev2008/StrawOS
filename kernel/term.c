@@ -129,59 +129,100 @@ static size_t cursor_y = 0;
 static uint32_t fg_color = 0x00FFFFFF;
 static uint32_t bg_color = 0x00000000;
 
-static void put_pixel(size_t x, size_t y, uint32_t color)
+#define TERM_MAX_COLS 256
+#define TERM_MAX_ROWS 160
+
+struct term_cell
 {
-    volatile uint32_t *row = (volatile uint32_t *)((uint8_t *)limine_framebuffer->address + y * limine_framebuffer->pitch);
-    row[x] = color;
+    char c;
+    uint32_t fg;
+    uint32_t bg;
+};
+
+static struct term_cell cells[TERM_MAX_ROWS][TERM_MAX_COLS];
+
+static size_t term_cols(void)
+{
+    size_t c = limine_framebuffer->width / CHAR_W;
+    return c > TERM_MAX_COLS ? TERM_MAX_COLS : c;
 }
 
-static size_t term_cols(void) { return limine_framebuffer->width / CHAR_W; }
-static size_t term_rows(void) { return limine_framebuffer->height / CHAR_H; }
-
-static void draw_char(size_t px, size_t py, char c, uint32_t fg, uint32_t bg)
+static size_t term_rows(void)
 {
+    size_t r = limine_framebuffer->height / CHAR_H;
+    return r > TERM_MAX_ROWS ? TERM_MAX_ROWS : r;
+}
+
+static inline bool cell_eq(const struct term_cell *a, const struct term_cell *b)
+{
+    if (a->c != b->c || a->bg != b->bg)
+        return false;
+    return a->c == ' ' || a->fg == b->fg;
+}
+
+static void draw_cell(size_t cx, size_t cy, const struct term_cell *cell)
+{
+    char c = cell->c;
     if (c < 0x20 || c > 0x7E) c = '?';
     const uint8_t *glyph = FONT[(unsigned char)(c - 0x20)];
-    for (int row = 0; row < 8; row++)
+    uint32_t fg = cell->fg, bg = cell->bg;
+    uint8_t *base = (uint8_t *)limine_framebuffer->address
+                  + cy * CHAR_H * limine_framebuffer->pitch
+                  + cx * CHAR_W * sizeof(uint32_t);
+
+    for (int y = 0; y < CHAR_H; y++)
     {
-        for (int col = 0; col < 8; col++)
-        {
-            uint32_t color = (glyph[row] & (1 << col)) ? fg : bg;
-            for (int sy = 0; sy < FONT_SCALE; sy++)
-            {
-                for (int sx = 0; sx < FONT_SCALE; sx++)
-                {
-                    size_t x = px + (size_t)col * FONT_SCALE + sx;
-                    size_t y = py + (size_t)row * FONT_SCALE + sy;
-                    if (x < limine_framebuffer->width && y < limine_framebuffer->height)
-                        put_pixel(x, y, color);
-                }
-            }
-        }
+        volatile uint32_t *row = (volatile uint32_t *)(base + (size_t)y * limine_framebuffer->pitch);
+        int gy = y / FONT_SCALE;
+        uint8_t bits = gy < 8 ? glyph[gy] : 0;
+        for (int x = 0; x < CHAR_W; x++)
+            row[x] = (bits & (1 << (x / FONT_SCALE))) ? fg : bg;
     }
+}
+
+static void set_cell(size_t cx, size_t cy, char c, uint32_t fg, uint32_t bg)
+{
+    struct term_cell n = { c, fg, bg };
+    struct term_cell *cur = &cells[cy][cx];
+    if (cell_eq(cur, &n))
+        return;
+    *cur = n;
+    draw_cell(cx, cy, cur);
 }
 
 static void scroll_up(void)
 {
-    for (size_t y = CHAR_H; y < term_rows() * CHAR_H; y++)
+    size_t rows = term_rows(), cols = term_cols();
+
+    for (size_t y = 0; y + 1 < rows; y++)
     {
-        volatile uint32_t *src = (volatile uint32_t *)((uint8_t *)limine_framebuffer->address + y * limine_framebuffer->pitch);
-        volatile uint32_t *dst = (volatile uint32_t *)((uint8_t *)limine_framebuffer->address + (y - CHAR_H) * limine_framebuffer->pitch);
-        for (size_t x = 0; x < limine_framebuffer->width; x++)
-            dst[x] = src[x];
+        for (size_t x = 0; x < cols; x++)
+        {
+            struct term_cell *dst = &cells[y][x];
+            const struct term_cell *src = &cells[y + 1][x];
+            if (!cell_eq(dst, src))
+            {
+                *dst = *src;
+                draw_cell(x, y, dst);
+            }
+        }
     }
 
-    for (size_t y = (term_rows() - 1) * CHAR_H; y < term_rows() * CHAR_H; y++)
-    {
-        volatile uint32_t *row = (volatile uint32_t *)((uint8_t *)limine_framebuffer->address + y * limine_framebuffer->pitch);
-        for (size_t x = 0; x < limine_framebuffer->width; x++)
-            row[x] = bg_color;
-    }
+    for (size_t x = 0; x < cols; x++)
+        set_cell(x, rows - 1, ' ', fg_color, bg_color);
+}
+
+static void term_invalidate(void)
+{
+    for (size_t y = 0; y < TERM_MAX_ROWS; y++)
+        for (size_t x = 0; x < TERM_MAX_COLS; x++)
+            cells[y][x].c = 0;
 }
 
 void term_init(void)
 {
     serial_init();
+    term_invalidate();
     cursor_x = 0;
     cursor_y = 0;
 }
@@ -200,13 +241,21 @@ void term_clear(uint32_t color)
 {
     for (size_t y = 0; y < limine_framebuffer->height; y++)
         for (size_t x = 0; x < limine_framebuffer->width; x++)
-            put_pixel(x, y, color);
+        {
+            volatile uint32_t *row = (volatile uint32_t *)((uint8_t *)limine_framebuffer->address + y * limine_framebuffer->pitch);
+            row[x] = color;
+        }
+    for (size_t y = 0; y < TERM_MAX_ROWS; y++)
+        for (size_t x = 0; x < TERM_MAX_COLS; x++)
+            cells[y][x] = (struct term_cell){ ' ', fg_color, color };
     cursor_x = 0;
     cursor_y = 0;
 }
 
 void term_set_fb_enabled(bool enabled)
 {
+    if (enabled && !term_fb_enabled)
+        term_invalidate();
     term_fb_enabled = enabled;
 }
 
@@ -237,7 +286,7 @@ void term_putchar(char c)
             cursor_y = term_rows() - 1;
         }
     }
-    draw_char(cursor_x * CHAR_W, cursor_y * CHAR_H, c, fg_color, bg_color);
+    set_cell(cursor_x, cursor_y, c, fg_color, bg_color);
     cursor_x++;
 }
 
