@@ -23,7 +23,6 @@ static Task    *wait_list;
 static uint64_t rq_min_vruntime;
 static uint64_t rq_load;
 static uint64_t rq_nr_running;
-static bool     sched_started;
 
 static uint64_t sched_latency;
 static uint64_t sched_min_gran;
@@ -285,9 +284,6 @@ static void activate(Task *t, bool initial)
     t->state = TASK_READY;
     set_runnable(t, true);
     rq_enqueue(t);
-
-    if (!sched_started)
-        return;
 
     Cpu *cpu = this_cpu();
     if (cpu->current == cpu->idle)
@@ -598,7 +594,6 @@ void task_sched_start(uint64_t tsc_per_ms)
     sched_latency     = 6 * tsc_per_ms;
     sched_min_gran    = tsc_per_ms * 3 / 4;
     sched_wakeup_gran = tsc_per_ms;
-    sched_started     = true;
 }
 
 void task_yield(void)
@@ -667,7 +662,7 @@ void task_scheduler_tick(void)
     }
 
     Task *t = cpu->current;
-    if (!t || !sched_started)
+    if (!t)
         return;
 
     if (t == cpu->idle)
