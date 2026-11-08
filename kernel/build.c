@@ -53,9 +53,11 @@ static struct limine_framebuffer *limine_framebuffer;
 
 #include "libk/string.h"
 #include "libk/kprintf.h"
+#include "libk/rbtree.h"
 
 #include "libk/string.c"
 #include "libk/kprintf.c"
+#include "libk/rbtree.c"
 
 #include "system/smp.h"
 

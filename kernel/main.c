@@ -28,6 +28,7 @@ void scheduler_timer_init(void)
 {
     idt_set_irq_handler(IRQ_TIMER, scheduler_timer_irq);
     lapic_timer_init(SCHEDULER_HZ);
+    task_sched_start(lapic_tsc_per_ms());
 }
 
 static VNode *disk_root_find(void)

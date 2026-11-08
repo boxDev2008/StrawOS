@@ -39,3 +39,5 @@
 #define KCALL_DUP2       31
 #define KCALL_MOUNT      32
 #define KCALL_UNMOUNT    33
+#define KCALL_SETPRIORITY 34
+#define KCALL_GETPRIORITY 35

@@ -201,6 +201,7 @@ static void devfs_tasks_visit(Task *task, void *ctx)
     info->pid = task->pid;
     info->state = (uint8_t)task->state;
     info->kernel = !task->owns_image;
+    info->nice = (int8_t)task->nice;
     info->cpu_ticks = task->cpu_ticks;
     info->mem_kb = pages * (PAGE_SIZE / 1024);
     memcpy(info->name, task->name, DEVFS_TASK_NAME_MAX);

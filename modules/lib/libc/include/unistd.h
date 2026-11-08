@@ -23,6 +23,7 @@ char *find_program(const char *name, char *resolved);
 pid_t spawnp(const char *file, const char *argv[]);
 int kill(pid_t pid);
 pid_t getpid(void);
+int nice(int inc);
 int waitpid(pid_t pid, uint32_t flags);
 
 #define TASK_RUNNING  0

@@ -78,6 +78,13 @@ ALWAYS_INLINE void hlt(void)    { __asm__ volatile("hlt"); }
 ALWAYS_INLINE void pause(void)  { __asm__ volatile("pause"); }
 ALWAYS_INLINE void panic(void)  { cli(); for(;;) hlt(); }
 
+ALWAYS_INLINE uint64_t rdtsc(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 ALWAYS_INLINE uint64_t irq_save(void)
 {
     uint64_t flags;

@@ -7,6 +7,11 @@
 
 #define TASK_BLOCK_FOREVER 0xFFFFFFFFu
 
+#define TASK_NICE_MIN (-20)
+#define TASK_NICE_MAX 19
+
+#define IPI_RESCHEDULE 0x40
+
 typedef enum
 {
     TASK_READY,
@@ -37,8 +42,25 @@ struct Task
 
     uint64_t   saved_rsp;
 
+    // Fair scheduling. vruntime is TSC cycles of CPU time scaled by
+    // NICE_0_WEIGHT / weight; the ready task with the smallest one runs next.
+    int        nice;
+    uint32_t   weight;
+    uint64_t   vruntime;
+    uint64_t   sum_exec;
+    uint64_t   exec_start;
+    uint64_t   slice_start;
+    bool       runnable;
+    bool       on_rq;
+    RbNode     rq_node;
+
     uint64_t   wake_tick;
+    bool       on_timer;
+    RbNode     timer_node;
+
     bool       waiting;
+    Task      *wait_prev;
+    Task      *wait_next;
 
     int        stdio[3];
     char       cwd[VFS_PATH_MAX];
@@ -47,7 +69,6 @@ struct Task
     bool       detached;
     bool       kill_pending;
     bool       in_kcall;
-    bool       resched_pending;
 
     uint64_t   cpu_ticks;
 
@@ -61,7 +82,6 @@ struct Task
 
     uint8_t    fpu_state[FPU_STATE_SIZE] ALIGN(16);
 
-    Task      *next;
     Task      *list_next;
 };
 
@@ -74,6 +94,9 @@ Task *task_create_idle(void);
 void task_yield(void);
 
 void task_scheduler_tick(void);
+void task_sched_start(uint64_t tsc_per_ms);
+void task_irq_exit(void);
+void task_resched(void);
 
 void task_sleep_ms(uint32_t ms);
 
@@ -103,6 +126,8 @@ int64_t  sys_getcwd(char *buf, size_t size);
 int64_t  sys_kill(uint64_t pid);
 int64_t  sys_task_status(uint64_t pid, int *code);
 uint64_t sys_getpid(void);
+int64_t  sys_setpriority(uint64_t pid, int64_t nice);
+int64_t  sys_getpriority(uint64_t pid, int *nice);
 
 typedef void (*TaskVisitor)(Task *t, void *ctx);
 void task_for_each(TaskVisitor visit, void *ctx);

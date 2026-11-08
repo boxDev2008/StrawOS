@@ -3,7 +3,35 @@ static Task *kernel_task = NULL;
 
 #define TASK_IDLE_STACK_SIZE (64 * 1024)
 
-static Task *task_run_queue = NULL;
+#define NICE_0_WEIGHT    1024
+#define SCHED_NR_LATENCY 8
+
+// Linux's nice-to-weight table: one nice step is roughly a 10% CPU share shift.
+static const uint32_t nice_weights[40] = {
+    /* -20 */ 88761, 71755, 56483, 46273, 36291,
+    /* -15 */ 29154, 23254, 18705, 14949, 11916,
+    /* -10 */  9548,  7620,  6100,  4904,  3906,
+    /*  -5 */  3121,  2501,  1991,  1586,  1277,
+    /*   0 */  1024,   820,   655,   526,   423,
+    /*   5 */   335,   272,   215,   172,   137,
+    /*  10 */   110,    87,    70,    56,    45,
+    /*  15 */    36,    29,    23,    18,    15,
+};
+
+// All scheduler state is global and serialised by the BKL plus disabled
+// interrupts: every path into it already holds both.
+static RbTree   rq_tree;        // READY tasks, ordered by vruntime
+static RbTree   timer_tree;     // SLEEPING tasks with a deadline, ordered by wake_tick
+static Task    *wait_list;      // tasks parked in task_block()
+static uint64_t rq_min_vruntime;
+static uint64_t rq_load;        // summed weight of READY + RUNNING tasks
+static uint64_t rq_nr_running;
+static bool     sched_started;
+
+// In TSC cycles; set by task_sched_start() once the TSC is calibrated.
+static uint64_t sched_latency;      // period in which every runnable task should run once
+static uint64_t sched_min_gran;     // shortest slice a task is given before tick preemption
+static uint64_t sched_wakeup_gran;  // vruntime lead a woken task needs to preempt
 
 static volatile uint64_t g_tick_count = 0;
 static uint64_t next_pid = 1;
@@ -53,6 +81,7 @@ static Task *task_alloc(void)
     if (!t)
         return NULL;
     memset(t, 0, sizeof(Task));
+    t->weight = NICE_0_WEIGHT;
 
     uint64_t flags = irq_save();
     t->list_next = task_list;
@@ -76,43 +105,248 @@ static void task_free(Task *t)
     kfree(t);
 }
 
-static void run_queue_push(Task *t)
+static bool vruntime_before(uint64_t a, uint64_t b)
 {
-    if (!task_run_queue)
-    {
-        task_run_queue = t;
-        t->next = t;
-        return;
-    }
-
-    t->next = task_run_queue->next;
-    task_run_queue->next = t;
+    return (int64_t)(a - b) < 0;
 }
 
-static void run_queue_remove(Task *t)
+static bool rq_less(const RbNode *a, const RbNode *b)
 {
-    if (!task_run_queue)
+    return vruntime_before(RB_ENTRY(a, Task, rq_node)->vruntime, RB_ENTRY(b, Task, rq_node)->vruntime);
+}
+
+static bool timer_less(const RbNode *a, const RbNode *b)
+{
+    return (int64_t)(RB_ENTRY(a, Task, timer_node)->wake_tick - RB_ENTRY(b, Task, timer_node)->wake_tick) < 0;
+}
+
+static Task *rq_first(void)
+{
+    RbNode *n = rb_first(&rq_tree);
+    return n ? RB_ENTRY(n, Task, rq_node) : NULL;
+}
+
+static void rq_enqueue(Task *t)
+{
+    rb_insert(&rq_tree, &t->rq_node, rq_less);
+    t->on_rq = true;
+}
+
+static void rq_dequeue(Task *t)
+{
+    if (!t->on_rq)
+        return;
+    rb_erase(&rq_tree, &t->rq_node);
+    t->on_rq = false;
+}
+
+static void set_runnable(Task *t, bool runnable)
+{
+    if (t->runnable == runnable)
+        return;
+    t->runnable = runnable;
+    if (runnable)
+    {
+        rq_load += t->weight;
+        rq_nr_running++;
+    }
+    else
+    {
+        rq_load -= t->weight;
+        rq_nr_running--;
+    }
+}
+
+static void timer_arm(Task *t, uint64_t wake_tick)
+{
+    t->wake_tick = wake_tick;
+    rb_insert(&timer_tree, &t->timer_node, timer_less);
+    t->on_timer = true;
+}
+
+static void timer_cancel(Task *t)
+{
+    if (!t->on_timer)
+        return;
+    rb_erase(&timer_tree, &t->timer_node);
+    t->on_timer = false;
+}
+
+static void wait_list_add(Task *t)
+{
+    t->wait_prev = NULL;
+    t->wait_next = wait_list;
+    if (wait_list)
+        wait_list->wait_prev = t;
+    wait_list = t;
+    t->waiting = true;
+}
+
+static void wait_list_remove(Task *t)
+{
+    if (!t->waiting)
+        return;
+    if (t->wait_prev)
+        t->wait_prev->wait_next = t->wait_next;
+    else
+        wait_list = t->wait_next;
+    if (t->wait_next)
+        t->wait_next->wait_prev = t->wait_prev;
+    t->wait_prev = t->wait_next = NULL;
+    t->waiting = false;
+}
+
+static void sched_detach(Task *t)
+{
+    rq_dequeue(t);
+    timer_cancel(t);
+    wait_list_remove(t);
+    set_runnable(t, false);
+}
+
+static uint64_t calc_delta_fair(uint64_t delta, const Task *t)
+{
+    if (t->weight == NICE_0_WEIGHT)
+        return delta;
+    if (delta > (1ULL << 40))
+        delta = 1ULL << 40;
+    return delta * NICE_0_WEIGHT / t->weight;
+}
+
+// Wall-clock time t is entitled to per scheduling period: the period split by
+// weight across the runnable load, with the load shared over every CPU.
+static uint64_t sched_slice(const Task *t)
+{
+    uint64_t nr = rq_nr_running + (t->runnable ? 0 : 1);
+    uint64_t load = rq_load + (t->runnable ? 0 : t->weight);
+    uint64_t period = nr > SCHED_NR_LATENCY ? nr * sched_min_gran : sched_latency;
+
+    uint64_t slice = period * t->weight * smp_cpu_count() / load;
+    if (slice > period)
+        slice = period;
+    if (slice < sched_min_gran)
+        slice = sched_min_gran;
+    return slice;
+}
+
+// min_vruntime only moves forward; it anchors where new and waking tasks land.
+// Tasks running on other CPUs aren't consulted, which only makes it lag a bit.
+static void update_min_vruntime(Task *curr)
+{
+    Task *first = rq_first();
+    uint64_t v;
+
+    if (curr)
+        v = curr->vruntime;
+    else if (first)
+        v = first->vruntime;
+    else
         return;
 
-    if (task_run_queue == t && task_run_queue->next == t)
+    if (first && vruntime_before(first->vruntime, v))
+        v = first->vruntime;
+    if (vruntime_before(rq_min_vruntime, v))
+        rq_min_vruntime = v;
+}
+
+// Charge the CPU time the current task used since it was last accounted.
+static void update_curr(Cpu *cpu)
+{
+    Task *t = cpu->current;
+    if (!t || t == cpu->idle)
+        return;
+
+    uint64_t now = rdtsc();
+    uint64_t delta = now - t->exec_start;
+    t->exec_start = now;
+    if ((int64_t)delta <= 0)
+        return;
+
+    t->sum_exec += delta;
+    t->vruntime += calc_delta_fair(delta, t);
+    update_min_vruntime(t);
+}
+
+static void place_task(Task *t, bool initial)
+{
+    if (initial)
     {
-        task_run_queue = NULL;
+        // A new task starts one virtual slice behind, so spawning can't be
+        // used to jump the queue.
+        t->vruntime = rq_min_vruntime + calc_delta_fair(sched_slice(t), t);
         return;
     }
 
-    Task *p = task_run_queue;
-    do
+    // A sleeper keeps its vruntime, but is credited at most half a latency
+    // period so a long sleep doesn't turn into a long monopoly.
+    uint64_t floor = rq_min_vruntime - sched_latency / 2;
+    if (vruntime_before(t->vruntime, floor))
+        t->vruntime = floor;
+}
+
+static bool wakeup_preempts(Task *curr, Task *t)
+{
+    int64_t lead = (int64_t)(curr->vruntime - t->vruntime);
+    return lead > (int64_t)calc_delta_fair(sched_wakeup_gran, t);
+}
+
+// Make t READY and decide who should run it: a local idle CPU, a remote idle
+// CPU (via IPI), or this CPU by preempting the current task.
+static void activate(Task *t, bool initial)
+{
+    timer_cancel(t);
+    wait_list_remove(t);
+    place_task(t, initial);
+    t->state = TASK_READY;
+    set_runnable(t, true);
+    rq_enqueue(t);
+
+    if (!sched_started)
+        return;
+
+    Cpu *cpu = this_cpu();
+    if (cpu->current == cpu->idle)
     {
-        if (p->next == t)
-        {
-            p->next = t->next;
-            if (task_run_queue == t)
-                task_run_queue = t->next;
-            return;
-        }
-        p = p->next;
+        cpu->need_resched = true;
+        return;
     }
-    while (p != task_run_queue);
+
+    if (smp_kick_idle_cpu())
+        return;
+
+    update_curr(cpu);
+    if (wakeup_preempts(cpu->current, t))
+        cpu->need_resched = true;
+}
+
+static void wake_up(Task *t)
+{
+    if (t->state == TASK_SLEEPING)
+        activate(t, false);
+}
+
+static void task_set_nice(Task *t, int nice)
+{
+    if (nice < TASK_NICE_MIN)
+        nice = TASK_NICE_MIN;
+    if (nice > TASK_NICE_MAX)
+        nice = TASK_NICE_MAX;
+
+    uint64_t flags = irq_save();
+
+    bool queued = t->on_rq;
+    bool was_runnable = t->runnable;
+    rq_dequeue(t);
+    set_runnable(t, false);
+
+    t->nice = nice;
+    t->weight = nice_weights[nice - TASK_NICE_MIN];
+
+    set_runnable(t, was_runnable);
+    if (queued)
+        rq_enqueue(t);
+
+    irq_restore(flags);
 }
 
 static void task_fpu_init(Task *t)
@@ -269,6 +503,8 @@ static Task *task_new_common(const char *name)
     Task *cur = task_current();
     strcpy(t->cwd, cur ? cur->cwd : "/");
     t->pid = next_pid++;
+    t->nice = cur ? cur->nice : 0;
+    t->weight = nice_weights[t->nice - TASK_NICE_MIN];
 
     task_fpu_init(t);
 
@@ -315,7 +551,7 @@ static Task *task_create_with(const char *name, TaskEntry entry, void *arg, ElfI
     task_prime_stack(t, entry, arg);
 
     uint64_t flags = irq_save();
-    run_queue_push(t);
+    activate(t, true);
     irq_restore(flags);
     return t;
 }
@@ -333,70 +569,106 @@ Task *task_create_from_image(const char *name, ElfImage *img, void *arg)
     return task_create_with(name, (TaskEntry)img->entry, arg, img);
 }
 
-static Task *pick_next(void)
-{
-    if (!task_run_queue)
-        return NULL;
-
-    Task *t = task_run_queue;
-    do
-    {
-        t = t->next;
-        if (t->state == TASK_READY)
-        {
-            task_run_queue = t;
-            return t;
-        }
-    }
-    while (t != task_run_queue);
-
-    return NULL;
-}
-
 static void schedule(TaskState prev_state)
 {
     Cpu *cpu = this_cpu();
     Task *prev = cpu->current;
 
+    update_curr(cpu);
+    cpu->need_resched = false;
+    cpu->kick_pending = false;
+
     if (prev->state == TASK_RUNNING)
         prev->state = prev_state;
 
-    Task *next = pick_next();
-    if (!next)
-        next = (prev != cpu->idle && prev->state == TASK_READY) ? prev : cpu->idle;
+    if (prev != cpu->idle)
+    {
+        if (prev->state == TASK_READY)
+            rq_enqueue(prev);
+        else
+            set_runnable(prev, false);
+    }
+
+    Task *next = rq_first();
+    if (next)
+        rq_dequeue(next);
+    else
+        next = cpu->idle;
 
     next->state = TASK_RUNNING;
-    prev->resched_pending = false;
     if (next == prev)
         return;
 
+    next->exec_start = rdtsc();
+    next->slice_start = next->sum_exec;
     cpu->current = next;
     task_switch_asm(&prev->saved_rsp, next->saved_rsp, prev->fpu_state, next->fpu_state);
 }
 
+void task_sched_start(uint64_t tsc_per_ms)
+{
+    if (tsc_per_ms == 0)
+        tsc_per_ms = 1000000;
+
+    sched_latency     = 6 * tsc_per_ms;
+    sched_min_gran    = tsc_per_ms * 3 / 4;
+    sched_wakeup_gran = tsc_per_ms;
+    sched_started     = true;
+}
+
 void task_yield(void)
 {
-    if (!task_current())
+    Task *t = task_current();
+    if (!t)
         return;
 
     uint64_t flags = irq_save();
+    Cpu *cpu = this_cpu();
+    if (t != cpu->idle)
+    {
+        update_curr(cpu);
+
+        // A plain re-enqueue would usually pick us straight back, since we
+        // are often the leftmost. Step behind whoever is next in line.
+        Task *first = rq_first();
+        if (first && !vruntime_before(first->vruntime, t->vruntime))
+            t->vruntime = first->vruntime;
+    }
     schedule(TASK_READY);
     irq_restore(flags);
 }
 
-static void wake_sleepers(uint64_t now)
+// Called with interrupts off when leaving a kcall: honour a preemption that
+// was requested while the kernel was non-preemptible.
+void task_resched(void)
 {
-    if (!task_run_queue)
-        return;
+    Cpu *cpu = this_cpu();
+    if (cpu->current && cpu->need_resched)
+        schedule(TASK_READY);
+}
 
-    Task *t = task_run_queue;
-    do
+// Called at the end of every IRQ: the handler may have woken something that
+// should run now, or the tick may have ended the current slice.
+void task_irq_exit(void)
+{
+    Cpu *cpu = this_cpu();
+    Task *t = cpu->current;
+    if (!t || !cpu->need_resched || t->in_kcall)
+        return;
+    schedule(TASK_READY);
+}
+
+static void wake_timers(uint64_t now)
+{
+    RbNode *n;
+    while ((n = rb_first(&timer_tree)))
     {
-        if (t->state == TASK_SLEEPING && (int64_t)(now - t->wake_tick) >= 0)
-            t->state = TASK_READY;
-        t = t->next;
+        Task *t = RB_ENTRY(n, Task, timer_node);
+        if ((int64_t)(now - t->wake_tick) < 0)
+            break;
+        timer_cancel(t);
+        wake_up(t);
     }
-    while (t != task_run_queue);
 }
 
 void task_scheduler_tick(void)
@@ -412,19 +684,38 @@ void task_scheduler_tick(void)
     if (cpu_is_bsp())
     {
         g_tick_count++;
-        wake_sleepers(g_tick_count);
+        wake_timers(g_tick_count);
     }
 
-    Task *t = task_current();
-    if (!t)
+    Task *t = cpu->current;
+    if (!t || !sched_started)
         return;
-    if (t->in_kcall)
+
+    if (t == cpu->idle)
     {
-        t->resched_pending = true;
+        if (rq_first())
+            cpu->need_resched = true;
         return;
     }
 
-    schedule(TASK_READY);
+    update_curr(cpu);
+
+    Task *first = rq_first();
+    if (!first)
+        return;
+
+    uint64_t ran = t->sum_exec - t->slice_start;
+    uint64_t ideal = sched_slice(t);
+    if (ran >= ideal)
+        cpu->need_resched = true;
+    else if (ran >= sched_min_gran && (int64_t)(t->vruntime - first->vruntime) > (int64_t)ideal)
+        cpu->need_resched = true;
+}
+
+static uint64_t ms_to_ticks(uint32_t ms)
+{
+    uint64_t ticks = DIV_CEIL((uint64_t)ms * SCHEDULER_HZ, 1000);
+    return ticks ? ticks : 1;
 }
 
 void task_sleep_ms(uint32_t ms)
@@ -433,13 +724,17 @@ void task_sleep_ms(uint32_t ms)
     if (!prev)
         return;
 
-    uint64_t ticks = DIV_CEIL((uint64_t)ms * SCHEDULER_HZ, 1000);
-    if (ticks == 0)
-        ticks = 1;
-
     uint64_t flags = irq_save();
-    prev->wake_tick = g_tick_count + ticks;
-    schedule(TASK_SLEEPING);
+    // The idle task can't sleep; it just lets anything ready run.
+    if (prev == this_cpu()->idle)
+    {
+        schedule(TASK_READY);
+    }
+    else
+    {
+        timer_arm(prev, g_tick_count + ms_to_ticks(ms));
+        schedule(TASK_SLEEPING);
+    }
     irq_restore(flags);
 }
 
@@ -449,17 +744,19 @@ void task_block(uint32_t timeout_ms)
     if (!prev)
         return;
 
-    uint64_t ticks = timeout_ms == TASK_BLOCK_FOREVER
-        ? (1ULL << 62)
-        : DIV_CEIL((uint64_t)timeout_ms * SCHEDULER_HZ, 1000);
-    if (ticks == 0)
-        ticks = 1;
-
     uint64_t flags = irq_save();
-    prev->wake_tick = g_tick_count + ticks;
-    prev->waiting = true;
-    schedule(TASK_SLEEPING);
-    prev->waiting = false;
+    if (prev == this_cpu()->idle)
+    {
+        schedule(TASK_READY);
+    }
+    else
+    {
+        if (timeout_ms != TASK_BLOCK_FOREVER)
+            timer_arm(prev, g_tick_count + ms_to_ticks(timeout_ms));
+        wait_list_add(prev);
+        schedule(TASK_SLEEPING);
+        wait_list_remove(prev);
+    }
     irq_restore(flags);
 }
 
@@ -467,16 +764,12 @@ void task_wake_waiters(void)
 {
     uint64_t flags = irq_save();
 
-    if (task_run_queue)
+    Task *t = wait_list;
+    while (t)
     {
-        Task *t = task_run_queue;
-        do
-        {
-            if (t->waiting && t->state == TASK_SLEEPING)
-                t->state = TASK_READY;
-            t = t->next;
-        }
-        while (t != task_run_queue);
+        Task *next = t->wait_next;
+        wake_up(t);
+        t = next;
     }
 
     irq_restore(flags);
@@ -656,7 +949,7 @@ int task_kill(Task *t)
         t->stack_pages = 0;
     }
 
-    run_queue_remove(t);
+    sched_detach(t);
     task_free(t);
     irq_restore(flags);
 
@@ -763,4 +1056,30 @@ uint64_t sys_getpid(void)
 {
     Task *cur = task_current();
     return cur ? cur->pid : 0;
+}
+
+static Task *task_find_live(uint64_t pid)
+{
+    Task *t = pid == 0 ? task_current() : task_find(pid);
+    if (!t || t->pid == 0 || t->state == TASK_DEAD)
+        return NULL;
+    return t;
+}
+
+int64_t sys_setpriority(uint64_t pid, int64_t nice)
+{
+    Task *t = task_find_live(pid);
+    if (!t)
+        return -1;
+    task_set_nice(t, (int)MAX(MIN(nice, TASK_NICE_MAX), TASK_NICE_MIN));
+    return 0;
+}
+
+int64_t sys_getpriority(uint64_t pid, int *nice)
+{
+    Task *t = task_find_live(pid);
+    if (!t || !nice)
+        return -1;
+    *nice = t->nice;
+    return 0;
 }

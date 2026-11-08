@@ -294,6 +294,53 @@ pid_t getpid(void)
     return (pid_t)kcall(KCALL_GETPID, 0, 0, 0, 0);
 }
 
+int getpriority(int which, int who)
+{
+    int prio;
+    if (which != PRIO_PROCESS)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    if ((int64_t)kcall(KCALL_GETPRIORITY, (uint64_t)who, (uint64_t)&prio, 0, 0) != 0)
+    {
+        errno = ESRCH;
+        return -1;
+    }
+    errno = 0;
+    return prio;
+}
+
+int setpriority(int which, int who, int prio)
+{
+    if (which != PRIO_PROCESS)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    if ((int64_t)kcall(KCALL_SETPRIORITY, (uint64_t)who, (uint64_t)(int64_t)prio, 0, 0) != 0)
+    {
+        errno = ESRCH;
+        return -1;
+    }
+    return 0;
+}
+
+int nice(int inc)
+{
+    int cur = getpriority(PRIO_PROCESS, 0);
+    if (cur == -1 && errno)
+        return -1;
+    int prio = cur + inc;
+    if (prio < PRIO_MIN)
+        prio = PRIO_MIN;
+    if (prio > PRIO_MAX)
+        prio = PRIO_MAX;
+    if (setpriority(PRIO_PROCESS, 0, prio) != 0)
+        return -1;
+    return prio;
+}
+
 int task_status(pid_t pid, int *code)
 {
     return (int)kcall(KCALL_WAITPID, (uint64_t)pid, (uint64_t)code, 0, 0);

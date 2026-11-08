@@ -41,6 +41,8 @@
 #define KCALL_DUP2       31
 #define KCALL_MOUNT      32
 #define KCALL_UNMOUNT    33
+#define KCALL_SETPRIORITY 34
+#define KCALL_GETPRIORITY 35
 
 typedef uint64_t (*KcallFn)(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4);
 

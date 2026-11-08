@@ -16,6 +16,9 @@ struct Cpu
     uint32_t  lapic_id;
     uint64_t  ticks;
     uint64_t  busy_ticks;
+    bool      online;
+    bool      need_resched;
+    bool      kick_pending;
 };
 
 ALWAYS_INLINE Cpu *this_cpu(void)
@@ -36,6 +39,7 @@ uint32_t smp_cpu_count(void);
 void smp_cpu_ticks(uint32_t index, uint64_t *total, uint64_t *busy);
 
 NORETURN void cpu_idle_loop(void);
+bool smp_kick_idle_cpu(void);
 
 void bkl_lock(void);
 void bkl_unlock(void);

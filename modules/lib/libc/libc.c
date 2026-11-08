@@ -25,6 +25,7 @@
 #include "include/sys/types.h"
 #include "include/sys/stat.h"
 #include "include/sys/time.h"
+#include "include/sys/resource.h"
 
 #include "include/inttypes.h"
 #include "include/signal.h"

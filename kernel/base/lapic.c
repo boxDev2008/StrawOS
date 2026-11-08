@@ -3,6 +3,11 @@
 #define LAPIC_REG_ID          0x020
 #define LAPIC_REG_EOI         0x0B0
 #define LAPIC_REG_SPURIOUS    0x0F0
+#define LAPIC_REG_ICR_LOW     0x300
+#define LAPIC_REG_ICR_HIGH    0x310
+
+#define LAPIC_ICR_PENDING     (1 << 12)
+#define LAPIC_ICR_ASSERT      (1 << 14)
 
 #define LAPIC_SPURIOUS_ENABLE 0x100
 #define LAPIC_SPURIOUS_VECTOR 0xFF
@@ -63,6 +68,16 @@ uint32_t lapic_id(void)
     return lapic_read(LAPIC_REG_ID) >> 24;
 }
 
+void lapic_send_ipi(uint32_t dest_lapic_id, uint8_t vector)
+{
+    uint64_t flags = irq_save();
+    while (lapic_read(LAPIC_REG_ICR_LOW) & LAPIC_ICR_PENDING)
+        pause();
+    lapic_write(LAPIC_REG_ICR_HIGH, dest_lapic_id << 24);
+    lapic_write(LAPIC_REG_ICR_LOW, LAPIC_ICR_ASSERT | vector);
+    irq_restore(flags);
+}
+
 #define LAPIC_REG_LVT_TIMER    0x320
 #define LAPIC_REG_TIMER_INITCNT 0x380
 #define LAPIC_REG_TIMER_CURCNT  0x390
@@ -78,6 +93,7 @@ uint32_t lapic_id(void)
 #define PIT_FREQUENCY 1193182
 
 static uint32_t lapic_timer_ticks_per_10ms = 0;
+static uint64_t tsc_ticks_per_ms = 0;
 
 static void pit_sleep_ms(uint32_t ms)
 {
@@ -102,11 +118,19 @@ static void lapic_timer_calibrate(void)
     lapic_write(LAPIC_REG_LVT_TIMER, LAPIC_TIMER_MASKED);
 
     lapic_write(LAPIC_REG_TIMER_INITCNT, 0xFFFFFFFF);
+    uint64_t tsc_start = rdtsc();
     pit_sleep_ms(10);
+    uint64_t tsc_end = rdtsc();
     uint32_t elapsed = 0xFFFFFFFF - lapic_read(LAPIC_REG_TIMER_CURCNT);
     lapic_write(LAPIC_REG_TIMER_INITCNT, 0);
 
     lapic_timer_ticks_per_10ms = elapsed;
+    tsc_ticks_per_ms = (tsc_end - tsc_start) / 10;
+}
+
+uint64_t lapic_tsc_per_ms(void)
+{
+    return tsc_ticks_per_ms;
 }
 
 void lapic_timer_init(uint32_t hz)

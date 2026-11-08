@@ -64,7 +64,8 @@ struct taskinfo
     uint64_t pid;
     uint8_t  state;
     uint8_t  kernel;
-    uint8_t  reserved[6];
+    int8_t   nice;
+    uint8_t  reserved[5];
     uint64_t cpu_ticks;
     uint64_t mem_kb;
     char     name[TASKINFO_NAME_MAX];

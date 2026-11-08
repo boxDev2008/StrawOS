@@ -26,8 +26,7 @@ ALWAYS_INLINE void kcall_leave(bool took_lock)
         if (t)
         {
             t->in_kcall = false;
-            if (t->resched_pending)
-                task_yield();
+            task_resched();
         }
         task_check_kill();
         bkl_unlock();
@@ -68,7 +67,9 @@ ALWAYS_INLINE void kcall_leave(bool took_lock)
     X(KCALL_RENAME,     fs_sys_rename)     \
     X(KCALL_DUP2,       fs_sys_dup2)       \
     X(KCALL_MOUNT,      fs_sys_mount)      \
-    X(KCALL_UNMOUNT,    fs_sys_unmount)
+    X(KCALL_UNMOUNT,    fs_sys_unmount)    \
+    X(KCALL_SETPRIORITY, sys_setpriority)  \
+    X(KCALL_GETPRIORITY, sys_getpriority)
 
 #define KCALL_WRAPPER(num, fn)                                                  \
     static uint64_t kcall_##fn(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) \

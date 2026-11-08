@@ -135,6 +135,8 @@ void idt_irq_handler(uint64_t vector)
     if (handler)
         handler();
 
+    task_irq_exit();
+
     if (took_lock)
     {
         task_check_kill();
@@ -186,6 +188,7 @@ IRQ_STUB(0x20)
 IRQ_STUB(0x21)
 IRQ_STUB(0x22)
 IRQ_STUB(0x23)
+IRQ_STUB(0x40)
 
 __attribute__((naked)) static void spurious_stub(void)
 {
@@ -235,6 +238,7 @@ void idt_init(void)
     idt_set_entry(IRQ_KEYBOARD, irq_stub_0x21, IDT_GATE_INTERRUPT);
     idt_set_entry(IRQ_NIC, irq_stub_0x22, IDT_GATE_INTERRUPT);
     idt_set_entry(IRQ_MOUSE, irq_stub_0x23, IDT_GATE_INTERRUPT);
+    idt_set_entry(IPI_RESCHEDULE, irq_stub_0x40, IDT_GATE_INTERRUPT);
     idt_set_entry(LAPIC_SPURIOUS_VECTOR, spurious_stub, IDT_GATE_INTERRUPT);
 
     idt_desc.limit = sizeof(idt) - 1;

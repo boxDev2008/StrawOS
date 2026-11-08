@@ -46,6 +46,7 @@ void cpu_init_bsp(void)
     c->self = c;
     c->index = 0;
     wrmsr(IA32_GS_BASE, (uint64_t)c);
+    c->online = true;
     cpu_count = 1;
     cpus_online = 1;
 
@@ -61,6 +62,31 @@ NORETURN void cpu_idle_loop(void)
     }
 }
 
+// Wake one halted CPU so it picks up newly ready work now rather than on its
+// next tick. Caller holds the BKL, so a CPU's current task can't change under us.
+bool smp_kick_idle_cpu(void)
+{
+    Cpu *self = this_cpu();
+    for (uint32_t i = 0; i < cpu_count; i++)
+    {
+        Cpu *c = &cpus[i];
+        if (c == self || !__atomic_load_n(&c->online, __ATOMIC_ACQUIRE))
+            continue;
+        if (c->current != c->idle || c->kick_pending)
+            continue;
+
+        c->kick_pending = true;
+        lapic_send_ipi(c->lapic_id, IPI_RESCHEDULE);
+        return true;
+    }
+    return false;
+}
+
+static void ipi_reschedule_irq(void)
+{
+    this_cpu()->need_resched = true;
+}
+
 NORETURN void ap_main(Cpu *c)
 {
     gdt_load();
@@ -70,6 +96,7 @@ NORETURN void ap_main(Cpu *c)
     lapic_enable();
     lapic_timer_start(SCHEDULER_HZ);
 
+    __atomic_store_n(&c->online, true, __ATOMIC_RELEASE);
     __atomic_fetch_add(&cpus_online, 1, __ATOMIC_RELEASE);
 
     cpu_idle_loop();
@@ -89,6 +116,7 @@ __attribute__((naked)) static void ap_entry(UNUSED struct limine_mp_info *info)
 void smp_init(void)
 {
     cpus[0].lapic_id = lapic_id();
+    idt_set_irq_handler(IPI_RESCHEDULE, ipi_reschedule_irq);
 
     struct limine_mp_response *resp = mp_request.response;
     if (!resp)
