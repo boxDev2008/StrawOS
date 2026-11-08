@@ -6,32 +6,28 @@ static Task *kernel_task = NULL;
 #define NICE_0_WEIGHT    1024
 #define SCHED_NR_LATENCY 8
 
-// Linux's nice-to-weight table: one nice step is roughly a 10% CPU share shift.
 static const uint32_t nice_weights[40] = {
-    /* -20 */ 88761, 71755, 56483, 46273, 36291,
-    /* -15 */ 29154, 23254, 18705, 14949, 11916,
-    /* -10 */  9548,  7620,  6100,  4904,  3906,
-    /*  -5 */  3121,  2501,  1991,  1586,  1277,
-    /*   0 */  1024,   820,   655,   526,   423,
-    /*   5 */   335,   272,   215,   172,   137,
-    /*  10 */   110,    87,    70,    56,    45,
-    /*  15 */    36,    29,    23,    18,    15,
+    88761, 71755, 56483, 46273, 36291,
+    29154, 23254, 18705, 14949, 11916,
+     9548,  7620,  6100,  4904,  3906,
+     3121,  2501,  1991,  1586,  1277,
+     1024,   820,   655,   526,   423,
+      335,   272,   215,   172,   137,
+      110,    87,    70,    56,    45,
+       36,    29,    23,    18,    15,
 };
 
-// All scheduler state is global and serialised by the BKL plus disabled
-// interrupts: every path into it already holds both.
-static RbTree   rq_tree;        // READY tasks, ordered by vruntime
-static RbTree   timer_tree;     // SLEEPING tasks with a deadline, ordered by wake_tick
-static Task    *wait_list;      // tasks parked in task_block()
+static RbTree   rq_tree;
+static RbTree   timer_tree;
+static Task    *wait_list;
 static uint64_t rq_min_vruntime;
-static uint64_t rq_load;        // summed weight of READY + RUNNING tasks
+static uint64_t rq_load;
 static uint64_t rq_nr_running;
 static bool     sched_started;
 
-// In TSC cycles; set by task_sched_start() once the TSC is calibrated.
-static uint64_t sched_latency;      // period in which every runnable task should run once
-static uint64_t sched_min_gran;     // shortest slice a task is given before tick preemption
-static uint64_t sched_wakeup_gran;  // vruntime lead a woken task needs to preempt
+static uint64_t sched_latency;
+static uint64_t sched_min_gran;
+static uint64_t sched_wakeup_gran;
 
 static volatile uint64_t g_tick_count = 0;
 static uint64_t next_pid = 1;
@@ -213,8 +209,6 @@ static uint64_t calc_delta_fair(uint64_t delta, const Task *t)
     return delta * NICE_0_WEIGHT / t->weight;
 }
 
-// Wall-clock time t is entitled to per scheduling period: the period split by
-// weight across the runnable load, with the load shared over every CPU.
 static uint64_t sched_slice(const Task *t)
 {
     uint64_t nr = rq_nr_running + (t->runnable ? 0 : 1);
@@ -229,8 +223,6 @@ static uint64_t sched_slice(const Task *t)
     return slice;
 }
 
-// min_vruntime only moves forward; it anchors where new and waking tasks land.
-// Tasks running on other CPUs aren't consulted, which only makes it lag a bit.
 static void update_min_vruntime(Task *curr)
 {
     Task *first = rq_first();
@@ -249,7 +241,6 @@ static void update_min_vruntime(Task *curr)
         rq_min_vruntime = v;
 }
 
-// Charge the CPU time the current task used since it was last accounted.
 static void update_curr(Cpu *cpu)
 {
     Task *t = cpu->current;
@@ -271,14 +262,10 @@ static void place_task(Task *t, bool initial)
 {
     if (initial)
     {
-        // A new task starts one virtual slice behind, so spawning can't be
-        // used to jump the queue.
         t->vruntime = rq_min_vruntime + calc_delta_fair(sched_slice(t), t);
         return;
     }
 
-    // A sleeper keeps its vruntime, but is credited at most half a latency
-    // period so a long sleep doesn't turn into a long monopoly.
     uint64_t floor = rq_min_vruntime - sched_latency / 2;
     if (vruntime_before(t->vruntime, floor))
         t->vruntime = floor;
@@ -290,8 +277,6 @@ static bool wakeup_preempts(Task *curr, Task *t)
     return lead > (int64_t)calc_delta_fair(sched_wakeup_gran, t);
 }
 
-// Make t READY and decide who should run it: a local idle CPU, a remote idle
-// CPU (via IPI), or this CPU by preempting the current task.
 static void activate(Task *t, bool initial)
 {
     timer_cancel(t);
@@ -628,8 +613,6 @@ void task_yield(void)
     {
         update_curr(cpu);
 
-        // A plain re-enqueue would usually pick us straight back, since we
-        // are often the leftmost. Step behind whoever is next in line.
         Task *first = rq_first();
         if (first && !vruntime_before(first->vruntime, t->vruntime))
             t->vruntime = first->vruntime;
@@ -638,8 +621,6 @@ void task_yield(void)
     irq_restore(flags);
 }
 
-// Called with interrupts off when leaving a kcall: honour a preemption that
-// was requested while the kernel was non-preemptible.
 void task_resched(void)
 {
     Cpu *cpu = this_cpu();
@@ -647,8 +628,6 @@ void task_resched(void)
         schedule(TASK_READY);
 }
 
-// Called at the end of every IRQ: the handler may have woken something that
-// should run now, or the tick may have ended the current slice.
 void task_irq_exit(void)
 {
     Cpu *cpu = this_cpu();
@@ -725,7 +704,6 @@ void task_sleep_ms(uint32_t ms)
         return;
 
     uint64_t flags = irq_save();
-    // The idle task can't sleep; it just lets anything ready run.
     if (prev == this_cpu()->idle)
     {
         schedule(TASK_READY);

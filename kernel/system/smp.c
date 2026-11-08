@@ -62,8 +62,6 @@ NORETURN void cpu_idle_loop(void)
     }
 }
 
-// Wake one halted CPU so it picks up newly ready work now rather than on its
-// next tick. Caller holds the BKL, so a CPU's current task can't change under us.
 bool smp_kick_idle_cpu(void)
 {
     Cpu *self = this_cpu();

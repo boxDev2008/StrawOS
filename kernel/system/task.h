@@ -42,8 +42,6 @@ struct Task
 
     uint64_t   saved_rsp;
 
-    // Fair scheduling. vruntime is TSC cycles of CPU time scaled by
-    // NICE_0_WEIGHT / weight; the ready task with the smallest one runs next.
     int        nice;
     uint32_t   weight;
     uint64_t   vruntime;

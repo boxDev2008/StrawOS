@@ -1,6 +1,3 @@
-// Intrusive red-black tree. Nodes live inside the structures they order; the
-// tree keeps its leftmost node cached so "smallest key" is O(1).
-
 typedef struct RbNode RbNode;
 
 struct RbNode

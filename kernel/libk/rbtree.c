@@ -70,7 +70,6 @@ void rb_insert(RbTree *tree, RbNode *node, RbLess less)
     RbNode *parent = NULL;
     bool leftmost = true;
 
-    // Equal keys go right, so tasks with equal keys keep FIFO order.
     while (*link)
     {
         parent = *link;
