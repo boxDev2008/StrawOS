@@ -129,10 +129,17 @@ static SxRect titlebar_rect(Window *w)
 
 static void wallpaper_generate(void)
 {
+    static char last[SX_SETTING_MAX];
+    static bool generated;
+
     char spec[SX_SETTING_MAX];
     if (!sx_setting_get("wallpaper", spec, sizeof(spec)))
         spec[0] = '\0';
+    if (generated && strcmp(spec, last) == 0)
+        return;
     sx_render_wallpaper(spec, S.wallpaper, S.width, S.height);
+    strcpy(last, spec);
+    generated = true;
 }
 
 static inline float rr_dist(float px, float py, SxRect r, float radius)

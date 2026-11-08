@@ -44,10 +44,29 @@ static const char *sx_settings_find(const char *buf, const char *key, size_t *va
     return NULL;
 }
 
+static char sx_settings_batch[SX_SETTINGS_FILE_MAX];
+static bool sx_settings_batching;
+
+void sx_settings_batch_begin(void)
+{
+    sx_settings_read(sx_settings_batch, sizeof(sx_settings_batch));
+    sx_settings_batching = true;
+}
+
+void sx_settings_batch_end(void)
+{
+    sx_settings_batching = false;
+}
+
 bool sx_setting_get(const char *key, char *out, size_t size)
 {
-    char buf[SX_SETTINGS_FILE_MAX];
-    sx_settings_read(buf, sizeof(buf));
+    char local[SX_SETTINGS_FILE_MAX];
+    const char *buf = sx_settings_batch;
+    if (!sx_settings_batching)
+    {
+        sx_settings_read(local, sizeof(local));
+        buf = local;
+    }
 
     size_t len;
     const char *value = sx_settings_find(buf, key, &len);
@@ -126,6 +145,11 @@ bool sx_setting_set(const char *key, const char *value)
         return false;
     bool ok = write(fd, out, pos) == (ssize_t)pos;
     close(fd);
+    if (sx_settings_batching)
+    {
+        memcpy(sx_settings_batch, out, pos);
+        sx_settings_batch[pos] = '\0';
+    }
     return ok;
 }
 

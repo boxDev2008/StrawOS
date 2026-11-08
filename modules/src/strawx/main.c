@@ -76,6 +76,7 @@ static void audio_settings_load(void)
 
 static void settings_load(void)
 {
+    sx_settings_batch_begin();
     const SxTheme *old_theme = sx_theme;
     sx_theme_load();
     if (sx_theme != old_theme)
@@ -88,6 +89,7 @@ static void settings_load(void)
     S.animations = sx_setting_get_int("animations", 1) != 0;
     wallpaper_generate();
     audio_settings_load();
+    sx_settings_batch_end();
 }
 
 static bool display_init(void)

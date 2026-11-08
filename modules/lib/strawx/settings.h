@@ -11,3 +11,6 @@ int  sx_setting_get_int(const char *key, int fallback);
 bool sx_setting_set(const char *key, const char *value);
 bool sx_setting_set_int(const char *key, int value);
 void sx_settings_apply(void);
+
+void sx_settings_batch_begin(void);
+void sx_settings_batch_end(void);

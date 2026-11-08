@@ -116,6 +116,8 @@ static struct
 
     int        speed;       // slider value, saved when the drag ends
     bool       dragging_speed;
+
+    bool       toggle_on[16];   // cached so drawing never touches the disk
 }
 G;
 
@@ -198,13 +200,36 @@ static void load_walls(void)
 
 static void refresh_current(void)
 {
-    if (!sx_setting_get("wallpaper", G.current, sizeof(G.current)) || !G.current[0])
-        strcpy(G.current, SX_WALLPAPER_DEFAULT);
+    char spec[SX_SETTING_MAX];
+    if (!sx_setting_get("wallpaper", spec, sizeof(spec)) || !spec[0])
+        strcpy(spec, SX_WALLPAPER_DEFAULT);
+    // Thumbnails decode the whole image; skip that when nothing changed.
+    if (G.preview && strcmp(spec, G.current) == 0)
+        return;
+    strcpy(G.current, spec);
 
     sx_image_free(G.preview);
     G.preview = render_thumb(G.current, PREVIEW_W, PREVIEW_H);
     sx_image_free(G.card_bg);
-    G.card_bg = render_thumb(G.current, CARD_W, CARD_H);
+    G.card_bg = NULL;
+    if (!G.preview)
+        return;
+
+    // Cut the card's aspect out of the preview instead of decoding the image a second time.
+    int cw = PREVIEW_H * CARD_W / CARD_H, ch = PREVIEW_H;
+    if (cw > PREVIEW_W)
+    {
+        cw = PREVIEW_W;
+        ch = PREVIEW_W * CARD_H / CARD_W;
+    }
+    SxImage *crop = sx_image_create(cw, ch);
+    if (!crop)
+        return;
+    int ox = (PREVIEW_W - cw) / 2, oy = (PREVIEW_H - ch) / 2;
+    for (int y = 0; y < ch; y++)
+        memcpy(crop->pixels + (size_t)y * cw, G.preview->pixels + (size_t)(y + oy) * PREVIEW_W + ox, (size_t)cw * 4);
+    G.card_bg = sx_image_scale(crop, CARD_W, CARD_H);
+    sx_image_free(crop);
 }
 
 static void apply_wallpaper(const char *spec)
@@ -309,6 +334,14 @@ static int clamp_speed(int speed)
 {
     speed = (speed + SPEED_STEP / 2) / SPEED_STEP * SPEED_STEP;
     return speed < SPEED_MIN ? SPEED_MIN : (speed > SPEED_MAX ? SPEED_MAX : speed);
+}
+
+static void load_toggles(void)
+{
+    sx_settings_batch_begin();
+    for (int i = 0; i < TOGGLE_N; i++)
+        G.toggle_on[i] = sx_setting_get_int(toggles[i].key, toggles[i].def) != 0;
+    sx_settings_batch_end();
 }
 
 static void load_speed(void)
@@ -495,7 +528,7 @@ static void draw_desktop_page(SxCanvas *c)
         sx_ui_panel(c, r, 10, hovering(HIT_TOGGLE, i) ? SX_THEME_SURFACE_HI : SX_THEME_SURFACE);
         sx_draw_text(c, &sx_font_sans_bold, r.x + 18, r.y + 12, toggles[i].title, SX_THEME_TEXT);
         sx_draw_text(c, &sx_font_sans_small, r.x + 18, r.y + 34, toggles[i].description, SX_THEME_TEXT_DIM);
-        draw_switch(c, toggle_switch_rect(i), sx_setting_get_int(toggles[i].key, toggles[i].def) != 0, hovering(HIT_TOGGLE, i));
+        draw_switch(c, toggle_switch_rect(i), G.toggle_on[i], hovering(HIT_TOGGLE, i));
     }
 }
 
@@ -953,8 +986,8 @@ static void activate(Hit h)
             break;
         case HIT_TOGGLE:
         {
-            const char *key = toggles[h.index].key;
-            sx_setting_set_int(key, sx_setting_get_int(key, toggles[h.index].def) ? 0 : 1);
+            G.toggle_on[h.index] = !G.toggle_on[h.index];
+            sx_setting_set_int(toggles[h.index].key, G.toggle_on[h.index]);
             sx_settings_apply();
             break;
         }
@@ -984,6 +1017,7 @@ int main(int argc, char **argv)
         load_walls();
     refresh_current();
     load_speed();
+    load_toggles();
     enter_page();
     draw();
 
@@ -1034,6 +1068,7 @@ int main(int argc, char **argv)
 
             case SX_EVENT_FOCUS_IN:
                 refresh_current();
+                load_toggles();
                 if (!G.dragging_speed)
                     load_speed();
                 if (G.page == PAGE_SOUND)
